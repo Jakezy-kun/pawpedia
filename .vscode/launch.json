@@ -1,0 +1,38 @@
+{
+  // PawPedia run configurations.
+  //
+  // Configuration is loaded at runtime from `.env` by flutter_dotenv, not by
+  // --dart-define-from-file. That is a deliberate choice of one mechanism over
+  // two: `.env` is listed as an asset in pubspec.yaml, so the same file feeds
+  // the app however it is launched — from here, from `flutter run`, or from a
+  // release build. Nothing has to be kept in sync.
+  "version": "0.2.0",
+  "configurations": [
+    {
+      // Day-to-day development. Hot reload on save.
+      "name": "PawPedia (debug)",
+      "request": "launch",
+      "type": "dart",
+      "program": "lib/main.dart",
+      "flutterMode": "debug"
+    },
+    {
+      // Use this to check breed-list scroll performance. Debug builds are not
+      // representative — the Pixel 6 emulator is the slower of the two targets,
+      // so profile there and watch the raster thread in DevTools.
+      "name": "PawPedia (profile)",
+      "request": "launch",
+      "type": "dart",
+      "program": "lib/main.dart",
+      "flutterMode": "profile"
+    },
+    {
+      // Final check before handing a build over. No debug banner, no asserts.
+      "name": "PawPedia (release)",
+      "request": "launch",
+      "type": "dart",
+      "program": "lib/main.dart",
+      "flutterMode": "release"
+    }
+  ]
+}

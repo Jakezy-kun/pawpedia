@@ -1,0 +1,83 @@
+[
+  {
+    "id": 1,
+    "breed_name": "Golden Retriever",
+    "breed_group": "Sporting",
+    "origin_country": "Scotland",
+    "average_lifespan": "10-12 years",
+    "temperament": "Friendly, Intelligent, Devoted, Gentle",
+    "picture": "https://images.dog.ceo/breeds/retriever-golden/mori_1.jpg"
+  },
+  {
+    "id": 2,
+    "breed_name": "Labrador Retriever",
+    "breed_group": "Sporting",
+    "origin_country": "Canada",
+    "average_lifespan": "10-12 years",
+    "temperament": "Outgoing, Even Tempered, Gentle, Agile",
+    "picture": "https://images.dog.ceo/breeds/labrador/n02099712_1941.jpg"
+  },
+  {
+    "id": 3,
+    "breed_name": "Border Collie",
+    "breed_group": "Herding",
+    "origin_country": "United Kingdom",
+    "average_lifespan": "12-15 years",
+    "temperament": "Energetic, Smart, Responsive, Tenacious",
+    "picture": "https://images.dog.ceo/breeds/collie-border/n02106166_1284.jpg"
+  },
+  {
+    "id": 4,
+    "breed_name": "Polish Lowland Sheepdog",
+    "breed_group": "Herding",
+    "origin_country": "Poland",
+    "average_lifespan": "12-14 years",
+    "temperament": "Confident, Lively, Clever, Self-Reliant",
+    "picture": "https://images.dog.ceo/breeds/sheepdog-english/n02105641_10672.jpg"
+  },
+  {
+    "id": 5,
+    "breed_name": "Chihuahua",
+    "breed_group": "Toy",
+    "origin_country": "Mexico",
+    "average_lifespan": "14-16 years",
+    "temperament": "Charming, Graceful, Sassy, Devoted",
+    "picture": "https://images.dog.ceo/breeds/chihuahua/msdaisy.jpg"
+  },
+  {
+    "id": 6,
+    "breed_name": "Papillon",
+    "breed_group": "Toy",
+    "origin_country": "France",
+    "average_lifespan": "14-16 years",
+    "temperament": "Friendly, Alert, Happy, Intelligent",
+    "picture": "https://images.dog.ceo/breeds/papillon/n02086910_3991.jpg"
+  },
+  {
+    "id": 7,
+    "breed_name": "Siberian Husky",
+    "breed_group": "Working",
+    "origin_country": "Russia",
+    "average_lifespan": "12-14 years",
+    "temperament": "Loyal, Outgoing, Mischievous, Alert",
+    "picture": "https://images.dog.ceo/breeds/husky/n02110185_1497.jpg"
+  },
+  {
+    "id": 8,
+    "breed_name": "Beagle",
+    "breed_group": "Hound",
+    "origin_country": "England",
+    "average_lifespan": "12-15 years",
+    "temperament": "Curious, Merry, Friendly, Determined",
+    "picture": "https://images.dog.ceo/breeds/beagle/n02088364_12397.jpg"
+  },
+  {
+    "id": 9,
+    "breed_name": "Poodle",
+    "breed_group": "Non-Sporting",
+    "origin_country": "Germany",
+    "average_lifespan": "12-15 years",
+    "temperament": "Active, Proud, Very Smart, Elegant",
+    "picture": "https://images.dog.ceo/breeds/poodle-standard/n02113799_1864.jpg"
+  }
+]

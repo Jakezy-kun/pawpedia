@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The breed API has no working HTTPS listener: port 443 on dogbreeds.mooo.com
+  does not answer, while port 80 serves normally. Android blocks cleartext HTTP
+  by default, so an exception is required for the app to reach it at all.
+
+  The exception is scoped to that one host. A blanket
+  android:usesCleartextTraffic="true" would silently permit unencrypted traffic
+  to every domain the app ever talks to, including Supabase.
+
+  Remove this file once the host serves HTTPS, and switch
+  BREED_API_BASE_URL in .env to https://.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">dogbreeds.mooo.com</domain>
+    </domain-config>
+    <base-config cleartextTrafficPermitted="false" />
+</network-security-config>
