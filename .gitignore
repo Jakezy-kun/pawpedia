@@ -52,3 +52,7 @@ app.*.map.json
 .env.local
 
 # Generated native splash/icon assets are checked in on purpose.
+
+# PHP API credentials
+server/config/config.php
+server/database/dev/

@@ -1,9 +1,11 @@
-/// Freehostia's free tier injects a short comment (`/*  */`) ahead of every
-/// response body it serves. `jsonDecode` throws on it, so every response from
-/// the breed API has to be trimmed back to where the JSON actually starts.
+/// Trims a response body back to the JSON document inside it.
 ///
-/// This is small but load-bearing: without it, the very first breed request
-/// fails with a FormatException that looks nothing like its real cause.
+/// The original `dogbreeds.php` endpoint began every response with `/*  */` —
+/// most likely text sitting outside the `<?php` tag in an included file — and
+/// `jsonDecode` throws on that. The REST API in `server/` discards stray output
+/// before responding, so this is now a guard rather than a requirement: a host
+/// that starts prepending output again degrades to working, not to a
+/// FormatException that points nowhere near the cause.
 abstract final class JsonSanitizer {
   /// Returns [body] from its first `{` or `[` through to the matching final
   /// `}` or `]`, discarding whatever the host wrapped around it.

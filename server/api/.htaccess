@@ -1,0 +1,24 @@
+# PawPedia REST API — routes /api/* to index.php.
+DirectoryIndex index.php
+Options -Indexes
+
+<IfModule mod_setenvif.c>
+    # Hosts that run PHP as CGI/FastCGI strip the Authorization header before
+    # PHP can read it. This copies it into an environment variable PHP can see.
+    SetEnvIf Authorization "(.+)" HTTP_AUTHORIZATION=$1
+</IfModule>
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    RewriteCond %{HTTP:Authorization} .
+    RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+    # Every path that is not a real file goes to the front controller:
+    #   /api/breeds      -> index.php
+    #   /api/breeds/5    -> index.php
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteRule ^ index.php [QSA,L]
+</IfModule>
+
+# Without mod_rewrite, the API still works at /api/index.php/breeds/5.

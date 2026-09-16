@@ -51,15 +51,10 @@ abstract final class AppConfig {
 
   // --- Breed API -----------------------------------------------------------
   //
-  // Defaults reflect the server as it actually behaves, which is not what the
-  // original brief described. See README "Breed API reality check":
-  //   * port 443 does not answer, so the scheme is http
-  //   * there is no /api prefix; the endpoint is /dogbreeds.php
+  // Base URL of the REST API in server/, including /api. Plain http only until
+  // SSL is enabled for the domain — port 443 does not answer today.
   static String get breedApiBaseUrl =>
-      _read('BREED_API_BASE_URL', fallback: 'http://dogbreeds.mooo.com');
-
-  static String get breedApiBreedsPath =>
-      _read('BREED_API_BREEDS_PATH', fallback: '/dogbreeds.php');
+      _read('BREED_API_BASE_URL', fallback: 'http://dogbreeds.mooo.com/api');
 
   static String get breedApiToken => _read('BREED_API_TOKEN');
 

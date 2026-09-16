@@ -6,7 +6,6 @@ import '../../core/theme/app_theme.dart';
 import '../../providers/auth_provider.dart';
 import '../../widgets/app_buttons.dart';
 import '../../widgets/brand_header.dart';
-import '../auth/login_screen.dart';
 
 class _Slide {
   const _Slide({
@@ -72,15 +71,14 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     );
   }
 
-  Future<void> _finish() async {
-    await context.read<AuthProvider>().completeOnboarding();
-    if (!mounted) return;
-    // Onboarding is marked complete, so AuthGate will render Login from here
-    // on. Replace rather than push so back does not return to the slides.
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute<void>(builder: (_) => const LoginScreen()),
-    );
-  }
+  /// Marks onboarding complete and nothing more. AuthGate reacts by rendering
+  /// Login in place of this screen.
+  ///
+  /// Do not navigate here as well. A pushReplacement raced AuthGate's rebuild:
+  /// when it won, it replaced the root route that *is* AuthGate, after which
+  /// nothing reacted to auth changes — "Continue as Guest" and a successful
+  /// login both silently did nothing.
+  Future<void> _finish() => context.read<AuthProvider>().completeOnboarding();
 
   @override
   Widget build(BuildContext context) {

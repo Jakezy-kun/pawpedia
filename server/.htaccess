@@ -1,0 +1,19 @@
+# Site-wide rules for the domain root (public_html).
+# If this folder already has an .htaccess, MERGE these lines into it instead of
+# replacing the file.
+
+# Stop Apache listing folder contents. Today the root publicly lists auth.php,
+# connection.php and dogbreeds.php.
+Options -Indexes
+
+<IfModule mod_headers.c>
+    Header always unset X-Powered-By
+</IfModule>
+
+# Once SSL is active for the domain, uncomment to force HTTPS, and set
+# 'require_https' => true in config/config.php.
+# <IfModule mod_rewrite.c>
+#     RewriteEngine On
+#     RewriteCond %{HTTPS} !=on
+#     RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [R=301,L]
+# </IfModule>

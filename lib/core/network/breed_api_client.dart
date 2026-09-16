@@ -10,83 +10,123 @@ import '../constants.dart';
 import '../errors/app_exception.dart';
 import 'json_sanitizer.dart';
 
-/// Talks to the read-only PHP/MySQL breed API.
+/// Client for the read-only PawPedia breed REST API (see `server/`).
 ///
-/// Three things about this server drive the design here, all verified against
-/// the live host rather than assumed from the spec:
+///   GET {base}/breeds        paginated collection: { data, meta, links }
+///   GET {base}/breeds/{id}   one breed:            { data, links }
 ///
-///  1. It has no working HTTPS listener, so requests go out over plain HTTP.
-///     That is why Android needs a scoped cleartext permit and iOS an ATS
-///     exception for this one domain.
-///  2. The REST routes are not under `/api`; the endpoint is `/dogbreeds.php`.
-///  3. Every response body is prefixed with a `/*  */` comment injected by the
-///     host, which is stripped by [JsonSanitizer] before decoding.
-///
-/// Whether the server honours `?search=`, `?group=` and `?country=` could not
-/// be confirmed without a token, so callers must not depend on it — see
-/// `BreedApiService`, which filters locally and treats server-side filtering
-/// as an optimisation only.
+/// Errors arrive as `{ "error": { "status", "code", "message" } }` with a
+/// matching HTTP status, so the status code alone decides how a failure is
+/// handled.
 class BreedApiClient {
-  BreedApiClient({http.Client? httpClient})
-      : _http = httpClient ?? http.Client();
+  BreedApiClient({
+    http.Client? httpClient,
+    String? baseUrl,
+    String? token,
+    this.pageSize = maxPageSize,
+  })  : assert(pageSize > 0 && pageSize <= maxPageSize),
+        _http = httpClient ?? http.Client(),
+        _baseUrl = baseUrl ?? AppConfig.breedApiBaseUrl,
+        _token = token ?? AppConfig.breedApiToken;
 
   final http.Client _http;
+  final String _baseUrl;
+  final String _token;
+
+  /// Largest page the server allows, and the default: the fewest round trips
+  /// for the whole catalogue.
+  static const int maxPageSize = 100;
+
+  /// Rows requested per page. Only tests use anything other than the maximum.
+  final int pageSize;
+
+  /// Guards against a server that keeps returning a `next` link forever.
+  static const int maxPages = 50;
 
   void dispose() => _http.close();
 
-  /// Fetches every breed.
-  Future<List<Map<String, dynamic>>> fetchBreeds({
-    String? search,
-    String? group,
-    String? country,
-  }) async {
-    final Map<String, String> query = <String, String>{
-      if (search != null && search.isNotEmpty) 'search': search,
-      if (group != null && group.isNotEmpty) 'group': group,
-      if (country != null && country.isNotEmpty) 'country': country,
-    };
-    final Object? decoded = await _get(query);
-    return _asRows(decoded);
-  }
+  /// Every breed, following the collection's `links.next` until it runs out.
+  Future<List<Map<String, dynamic>>> fetchBreeds() async {
+    final List<Map<String, dynamic>> rows = <Map<String, dynamic>>[];
+    final Set<Uri> visited = <Uri>{};
 
-  /// Fetches a single breed by its MySQL id.
-  ///
-  /// Returns null when the server answers successfully but has no such breed,
-  /// which the caller treats as "fall back to the cached copy" rather than an
-  /// error.
-  Future<Map<String, dynamic>?> fetchBreed(int id) async {
-    final Object? decoded = await _get(<String, String>{'id': id.toString()});
-    final List<Map<String, dynamic>> rows = _asRows(decoded);
-    if (rows.isEmpty) return null;
-    // Some handlers ignore ?id= and return the whole table; pick the right row
-    // rather than trusting position.
-    for (final Map<String, dynamic> row in rows) {
-      if (int.tryParse(row['id']?.toString() ?? '') == id) return row;
+    Uri? next = _resource('breeds').replace(
+      queryParameters: <String, String>{'per_page': '$pageSize'},
+    );
+
+    while (next != null) {
+      if (!visited.add(next) || visited.length > maxPages) {
+        throw const AppException(
+          'The breed service returned an endless list of pages.',
+          kind: AppErrorKind.parsing,
+        );
+      }
+
+      final Object? body = await _get(next);
+      rows.addAll(_asRowList(body));
+      next = _nextLink(body, current: next);
     }
-    return rows.length == 1 ? rows.first : null;
+
+    return rows;
   }
 
-  Future<Object?> _get(Map<String, String> query) async {
-    if (!AppConfig.hasBreedApi) {
+  /// One breed, or null when the API answers 404 for this id — the caller
+  /// keeps showing the copy it already has.
+  Future<Map<String, dynamic>?> fetchBreed(int id) async {
+    try {
+      final Object? body = await _get(_resource('breeds/$id'));
+      final Object? data = body is Map ? body['data'] : null;
+      return data is Map ? data.cast<String, dynamic>() : null;
+    } on _NotFound {
+      return null;
+    }
+  }
+
+  /// `{base}/{path}`, keeping any path the base URL already has (`/api`).
+  Uri _resource(String path) {
+    final Uri base = Uri.parse(_baseUrl);
+    final String basePath = base.path.replaceAll(RegExp(r'/+$'), '');
+    return base.replace(path: '$basePath/$path', query: null);
+  }
+
+  /// Resolves `links.next` against the page it came from.
+  ///
+  /// Refuses a link that points at a different host, scheme or port: following
+  /// it would hand the bearer token to whoever that host is.
+  Uri? _nextLink(Object? body, {required Uri current}) {
+    final Object? links = body is Map ? body['links'] : null;
+    final Object? next = links is Map ? links['next'] : null;
+    if (next is! String || next.isEmpty) return null;
+
+    final Uri resolved = current.resolve(next);
+    if (resolved.scheme != current.scheme ||
+        resolved.host != current.host ||
+        resolved.port != current.port) {
+      throw const AppException(
+        'The breed service returned a link to another server.',
+        kind: AppErrorKind.parsing,
+      );
+    }
+    return resolved;
+  }
+
+  Future<Object?> _get(Uri uri) async {
+    if (_token.isEmpty) {
       throw const AppException(
         'The breed API token is missing from .env.',
         kind: AppErrorKind.apiAuth,
       );
     }
 
-    final Uri uri = _buildUri(query);
-
     late final http.Response response;
     try {
-      response = await _http
-          .get(
-            uri,
-            headers: <String, String>{
-              'Authorization': 'Bearer ${AppConfig.breedApiToken}',
-              'Accept': 'application/json',
-            },
-          )
-          .timeout(AppDurations.networkTimeout);
+      response = await _http.get(
+        uri,
+        headers: <String, String>{
+          'Authorization': 'Bearer $_token',
+          'Accept': 'application/json',
+        },
+      ).timeout(AppDurations.networkTimeout);
     } on TimeoutException {
       throw const AppException(
         'The breed service took too long to respond.',
@@ -97,33 +137,50 @@ class BreedApiClient {
         'No internet connection.',
         kind: AppErrorKind.network,
       );
-    } on http.ClientException catch (error) {
-      throw AppException(
-        'Could not reach the breed service. ${error.message}',
+    } on http.ClientException {
+      throw const AppException(
+        'Could not reach the breed service.',
         kind: AppErrorKind.network,
       );
     }
 
+    final Object? body = _decode(response, uri);
+
+    if (response.statusCode == 200) return body;
+
+    if (kDebugMode) {
+      debugPrint('PawPedia: breed API ${response.statusCode} for $uri: '
+          '${_errorCode(body) ?? 'no error code'}');
+    }
+
     switch (response.statusCode) {
-      case 200:
-        break;
-      case 400:
-        // The server answers 400 with {"error":"Authorization header is
-        // missing"} — a build configuration problem, not a user error.
+      case 401:
         throw const AppException(
-          'The breed service rejected the request. Check BREED_API_TOKEN in .env.',
+          'The breed API token is not valid. Check BREED_API_TOKEN in .env.',
           kind: AppErrorKind.apiAuth,
         );
-      case 401:
       case 403:
         throw const AppException(
-          'The breed API token is not valid.',
+          'The breed service requires HTTPS. Use https:// in BREED_API_BASE_URL.',
           kind: AppErrorKind.apiAuth,
         );
       case 404:
+        // A missing breed is a normal outcome; a missing route is a
+        // configuration mistake.
+        if (_errorCode(body) == 'breed_not_found') throw const _NotFound();
         throw const AppException(
-          'The breed endpoint was not found. Check BREED_API_BREEDS_PATH in .env.',
+          'The breed API was not found. Check BREED_API_BASE_URL in .env.',
           kind: AppErrorKind.apiAuth,
+        );
+      case 400:
+        throw const AppException(
+          'The breed service rejected the request.',
+          kind: AppErrorKind.parsing,
+        );
+      case 503:
+        throw const AppException(
+          'The breed service is temporarily unavailable. Please try again.',
+          kind: AppErrorKind.network,
         );
       default:
         throw AppException(
@@ -131,14 +188,18 @@ class BreedApiClient {
           kind: AppErrorKind.network,
         );
     }
+  }
 
-    final String body = JsonSanitizer.clean(utf8.decode(response.bodyBytes));
+  Object? _decode(http.Response response, Uri uri) {
+    final String text = utf8.decode(response.bodyBytes, allowMalformed: true);
+    if (text.trim().isEmpty) return null;
     try {
-      return jsonDecode(body);
+      // The REST API sends clean JSON. Sanitising is kept as a guard against a
+      // misconfigured host prepending output, which the old endpoint did.
+      return jsonDecode(JsonSanitizer.clean(text));
     } on FormatException {
-      if (kDebugMode) {
-        debugPrint('PawPedia: unparseable breed response from $uri');
-      }
+      if (response.statusCode != 200) return null;
+      if (kDebugMode) debugPrint('PawPedia: unparseable breed response from $uri');
       throw const AppException(
         'The breed service sent something we could not read.',
         kind: AppErrorKind.parsing,
@@ -146,36 +207,27 @@ class BreedApiClient {
     }
   }
 
-  Uri _buildUri(Map<String, String> query) {
-    final Uri base = Uri.parse(AppConfig.breedApiBaseUrl);
-    final String path = AppConfig.breedApiBreedsPath;
-    return base.replace(
-      path: path.startsWith('/') ? path : '/$path',
-      queryParameters: query.isEmpty ? null : query,
-    );
+  static String? _errorCode(Object? body) {
+    final Object? error = body is Map ? body['error'] : null;
+    final Object? code = error is Map ? error['code'] : null;
+    return code is String ? code : null;
   }
 
-  /// Normalises the several shapes a hand-written PHP endpoint might return:
-  /// a bare array, or an object wrapping one under `data`, `breeds` or
-  /// `result`, or a single object for a single row.
-  static List<Map<String, dynamic>> _asRows(Object? decoded) {
-    if (decoded is List) {
-      return decoded
-          .whereType<Map>()
-          .map((Map row) => row.cast<String, dynamic>())
-          .toList();
+  static List<Map<String, dynamic>> _asRowList(Object? body) {
+    final Object? data = body is Map ? body['data'] : null;
+    if (data is! List) {
+      throw const AppException(
+        'The breed service sent an unexpected response.',
+        kind: AppErrorKind.parsing,
+      );
     }
-    if (decoded is Map) {
-      final Map<String, dynamic> map = decoded.cast<String, dynamic>();
-      for (final String key in const <String>['data', 'breeds', 'result', 'rows']) {
-        final Object? nested = map[key];
-        if (nested is List) return _asRows(nested);
-      }
-      // A single breed object.
-      if (map.containsKey('breed_name') || map.containsKey('id')) {
-        return <Map<String, dynamic>>[map];
-      }
-    }
-    return const <Map<String, dynamic>>[];
+    return data
+        .whereType<Map<dynamic, dynamic>>()
+        .map((Map<dynamic, dynamic> row) => row.cast<String, dynamic>())
+        .toList();
   }
+}
+
+class _NotFound implements Exception {
+  const _NotFound();
 }

@@ -5,7 +5,7 @@ import 'package:pawpedia/core/network/json_sanitizer.dart';
 
 void main() {
   group('JsonSanitizer', () {
-    test('strips the comment Freehostia prepends to every response', () {
+    test('strips the comment the old PHP endpoint prepended to every response', () {
       // This is the exact shape the live host returns; without stripping it,
       // the first breed request fails with a FormatException whose message
       // gives no hint of the real cause.

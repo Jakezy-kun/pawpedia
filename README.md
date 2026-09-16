@@ -12,7 +12,7 @@ fully working guest mode.
 ## Contents
 
 - [Quick start](#quick-start)
-- [Breed API reality check](#breed-api-reality-check) — **read this before debugging network issues**
+- [Breed REST API](#breed-rest-api) — endpoints, server structure, deploying to Freehostia, Postman
 - [Configuration (`.env`)](#configuration-env)
 - [Supabase setup](#supabase-setup)
 - [Deploying the delete-account Edge Function](#deploying-the-delete-account-edge-function)
@@ -42,62 +42,201 @@ Requires Flutter 3.27+ / Dart 3.6+ (developed against Flutter 3.47.4, Dart 3.13.
 
 ---
 
-## Breed API reality check
+## Breed REST API
 
-The original specification described the catalogue as
-`GET https://dogbreeds.mooo.com/api/breeds`. That is not how the deployed server
-behaves. Verified against the live host:
+The breed catalogue is served by a small PHP REST API in [`server/`](server/),
+deployed to Freehostia next to the MySQL database it reads. It replaces the
+original single-script `dogbreeds.php` endpoint, which returned JSON labelled as
+`text/html`, prefixed every body with `/*  */`, answered a missing token with
+400 and let PUT/DELETE reach the handler.
 
-| Expected | Actual |
-| --- | --- |
-| `https://` on port 443 | **Port 443 does not answer.** The connection times out; only port 80 serves. |
-| `/api/breeds` | **404.** The document root exposes `auth.php`, `connection.php` and `dogbreeds.php`. The endpoint is `/dogbreeds.php`. |
-| Clean JSON body | Every response is **prefixed with `/*  */`**, injected by Freehostia's free tier. `jsonDecode` throws on it. |
+### Endpoints
 
-The app is built against the server as it actually is:
+Base URL: `http://dogbreeds.mooo.com/api` (switch to `https://` once SSL is on).
+Every request except `OPTIONS` needs `Authorization: Bearer <token>`.
 
-- `BREED_API_BASE_URL` defaults to `http://dogbreeds.mooo.com` and
-  `BREED_API_BREEDS_PATH` to `/dogbreeds.php`.
-- [`JsonSanitizer`](lib/core/network/json_sanitizer.dart) trims each body back to
-  its first `{` or `[` before decoding. This is covered by tests, because it is
-  the single most likely runtime failure and its symptom (a `FormatException`)
-  points nowhere near its cause.
-- Cleartext HTTP is permitted **for that one host only** — via
-  [`network_security_config.xml`](android/app/src/main/res/xml/network_security_config.xml)
-  on Android and a scoped `NSExceptionDomains` entry on iOS. A blanket
-  `usesCleartextTraffic` / `NSAllowsArbitraryLoads` would have weakened every
-  other connection the app makes, including Supabase.
+| Method | Path | Returns |
+| --- | --- | --- |
+| `GET` | `/breeds` | Paginated collection |
+| `GET` | `/breeds/{id}` | One breed |
+| `HEAD` | either of the above | Headers only |
+| `OPTIONS` | either of the above | `204`, `Allow`, CORS preflight — no token needed |
 
-Auth behaves as specified: a missing header returns
-`400 {"error":"Authorization header is missing"}` and a bad token returns `401`.
+Query parameters for `GET /breeds` — all optional, all combinable:
 
-### If you fix the server
+| Parameter | Example | Meaning |
+| --- | --- | --- |
+| `search` | `search=golden` | Breed name contains, case-insensitive (max 100 chars) |
+| `group` | `group=Toy,Sporting` | Breed group is any of, case-insensitive (max 20) |
+| `country` | `country=Scotland` | Origin country is any of, case-insensitive (max 20) |
+| `page` | `page=2` | 1-based page number (default 1) |
+| `per_page` | `per_page=25` | 1–100 (default 50) |
 
-Set `Options -Indexes` in `.htaccess` (the document root is currently browsable,
-which publicly lists your PHP filenames), add HTTPS, and route `/api/breeds`.
-Then update `.env`:
+**Collection response**
 
-```env
-BREED_API_BASE_URL=https://dogbreeds.mooo.com
-BREED_API_BREEDS_PATH=/api/breeds
+```json
+{
+  "data": [
+    {
+      "id": 1,
+      "breed_name": "Golden Retriever",
+      "breed_group": "Sporting",
+      "origin_country": "Scotland",
+      "average_lifespan": "10-12 years",
+      "temperament": "Friendly, Intelligent, Devoted, Gentle",
+      "picture": "https://images.dog.ceo/breeds/retriever-golden/mori_1.jpg"
+    }
+  ],
+  "meta":  { "total": 9, "count": 1, "page": 1, "per_page": 1, "total_pages": 9 },
+  "links": {
+    "self":  "/api/breeds?page=1&per_page=1",
+    "first": "/api/breeds?page=1&per_page=1",
+    "last":  "/api/breeds?page=9&per_page=1",
+    "prev":  null,
+    "next":  "/api/breeds?page=2&per_page=1"
+  }
+}
 ```
 
-and delete the two cleartext exceptions. No Dart changes are needed.
+Links keep any `search`/`group`/`country` filters, so following `next` never
+drops them. `GET /breeds/{id}` returns `{ "data": { ...breed }, "links": {...} }`.
 
-### Why filtering happens on the device
+**Errors** always have the same shape, with the HTTP status repeated in the body:
 
-`BreedProvider` fetches the whole catalogue once and filters in memory. This is
-not a shortcut:
+```json
+{ "error": { "status": 404, "code": "breed_not_found", "message": "Breed 99 was not found." } }
+```
 
-- The Explore chips show a count per group, which needs the full catalogue anyway.
-- Whether `dogbreeds.php` honours `?search=`, `?group=` and `?country=` could not
-  be verified without a token, so depending on it would make correctness rest on
-  an unknown.
-- A breeds directory is a small, static dataset, and local filtering makes the
-  debounced search instant.
+| Status | `code` | When |
+| --- | --- | --- |
+| 200 | — | Success |
+| 304 | — | `If-None-Match` matches the current `ETag` (no body) |
+| 400 | `invalid_parameter` | Bad `page`, `per_page`, `search`, list length, or a non-integer id |
+| 401 | `unauthorized` | Token missing or wrong. Sends `WWW-Authenticate: Bearer realm="PawPedia"` |
+| 403 | `https_required` | Plain HTTP while `require_https` is on |
+| 404 | `breed_not_found` / `route_not_found` | No such breed / no such path |
+| 405 | `method_not_allowed` | `POST`, `PUT`, `PATCH`, `DELETE`. Sends `Allow: GET, HEAD, OPTIONS` |
+| 500 | `server_misconfigured` / `internal_error` | Config missing or placeholder token; unexpected error (logged, never shown) |
+| 503 | `database_unavailable` | MySQL unreachable. Sends `Retry-After` |
 
-Server-side parameters are still implemented in `BreedApiClient` and used for
-`?id=` on Breed Detail, falling back to the cache if the server ignores them.
+Every response is `Content-Type: application/json; charset=utf-8` with
+`X-Content-Type-Options: nosniff` and no `X-Powered-By`. Successful reads carry
+a weak `ETag` and `Cache-Control: private, max-age=300`.
+
+### How the server is structured
+
+```
+server/
+  .htaccess                 domain root: no directory listing, hide X-Powered-By
+  api/
+    .htaccess               routes /api/* to index.php, keeps the Authorization header
+    index.php               front controller
+  src/                      web access denied
+    bootstrap.php           wires config → request → auth → router → controller
+    Request.php             parsed method, path, query, headers
+    Response.php            the only code that writes output; discards stray output first
+    Router.php              404 vs 405 vs dispatch; OPTIONS preflight
+    Auth.php                constant-time bearer token check
+    Database.php            PDO with real prepared statements
+    BreedRepository.php     all SQL; every value bound
+    BreedController.php     /breeds and /breeds/{id}, validation, pagination, links
+    ApiException.php        one exception type per HTTP error
+  config/
+    config.example.php      copy to config.php (gitignored); web access denied
+  database/schema.sql       reference schema and recommended indexes
+  postman/                  collection + Local and Freehostia environments
+  tests/
+    run_tests.php           end-to-end checks against a real server
+    make_dev_db.php         SQLite copy of the catalogue for local work
+    dev-router.php          .htaccess equivalent for php -S
+```
+
+Written for **PHP 7.4**, which is what Freehostia runs (7.4.33). No PHP 8 syntax.
+
+### Deploying to Freehostia
+
+1. **Create the config.** Copy `server/config/config.example.php` to
+   `server/config/config.php`. Fill in the MySQL details (the same ones the
+   current `connection.php` uses), the table name, and `api_token` — reuse the
+   token the app and Postman already have. The API refuses to serve anything
+   while `api_token` is empty or still `change-me`.
+2. **Upload** through Freehostia's File Manager or FTP, into the domain's web
+   root, so it sits alongside the existing files:
+   ```
+   public_html/            (the dogbreeds.mooo.com document root)
+     .htaccess             ← server/.htaccess — merge if one already exists
+     api/                  ← server/api/
+     src/                  ← server/src/
+     config/               ← server/config/  (config.php + .htaccess)
+     auth.php  connection.php  dogbreeds.php   (old files, leave for now)
+   ```
+   Safer still: put `src/` and `config/` **outside** `public_html` and point
+   `$appRoot` in `api/index.php` at them.
+3. **Check it** from a terminal (or with the Postman collection below):
+   ```bash
+   curl -i -H "Authorization: Bearer YOUR_TOKEN" http://dogbreeds.mooo.com/api/breeds
+   ```
+   Expect `200`, `Content-Type: application/json; charset=utf-8`, and a body
+   that starts with `{`.
+4. **If `/api/breeds` returns 404** but `/api/index.php/breeds` works,
+   `mod_rewrite` is unavailable on the plan. Set
+   `BREED_API_BASE_URL=http://dogbreeds.mooo.com/api/index.php` — the API and
+   the app both handle that form.
+   **If the whole site returns 500** after uploading `.htaccess`, the host does
+   not allow `Options` overrides; delete the `Options -Indexes` line.
+5. **Retire the old endpoint** once the app works against the new one: delete
+   `dogbreeds.php` and `auth.php`, and `connection.php` once nothing else uses it.
+   (`auth.php` is also the likely source of the old `/*  */` prefix — it returns
+   exactly that text, which suggests it sits outside the `<?php` tag.)
+6. **Turn on HTTPS** when Freehostia allows it: uncomment the redirect in the
+   root `.htaccess`, set `'require_https' => true`, and change the app's
+   `BREED_API_BASE_URL` to `https://`. Until then the bearer token travels
+   unencrypted, which is the API's biggest remaining weakness.
+
+### DNS: FreeDNS → Freehostia
+
+`dogbreeds.mooo.com` needs an **A record** in FreeDNS pointing at the Freehostia
+server's IP (currently `162.210.102.232`), and the domain must be added as a
+hosted domain in Freehostia's control panel. Both are already in place — the
+host serves the site. If Freehostia ever moves the account to another server,
+update the A record.
+
+### Running the API locally
+
+Uses XAMPP's PHP and a SQLite copy of the catalogue; no MySQL needed.
+
+```bash
+php server/tests/make_dev_db.php
+```
+
+```powershell
+$env:PAWPEDIA_CONFIG="$PWD\server\database\dev\config.php"
+php -S 127.0.0.1:8080 -t server server/tests/dev-router.php
+```
+
+Then `GET http://127.0.0.1:8080/api/breeds` with `Authorization: Bearer dev-token`.
+To point the app on the Android emulator at it, set
+`BREED_API_BASE_URL=http://10.0.2.2:8080/api` and `BREED_API_TOKEN=dev-token`
+(`10.0.2.2` is the emulator's name for your computer; debug builds allow
+cleartext to it, release builds do not).
+
+### Postman
+
+Import everything in [`server/postman/`](server/postman/): the collection and
+both environments. Pick **PawPedia - Local** or **PawPedia - Freehostia**, set
+`token` on the Freehostia one (it is a *secret* variable — do not export or
+share the environment once it holds the real value), and run the collection.
+Its tests check status codes, the `{data, meta, links}` shape, the error shape,
+`Content-Type`, that nothing precedes the JSON, 304 on a repeated request, and
+401/404/400/405 on the error cases.
+
+### Why the app still filters on the device
+
+`BreedProvider` fetches the whole catalogue once — following `links.next` across
+pages — and filters in memory. The Explore chips show a count per group, which
+needs every breed anyway; the catalogue is small and static; and local filtering
+makes the debounced search instant. The API's `search`/`group`/`country`
+parameters exist for Postman and any other client.
 
 ---
 
@@ -109,8 +248,7 @@ Server-side parameters are still implemented in `BreedApiClient` and used for
 SUPABASE_URL=https://your-project-ref.supabase.co
 SUPABASE_ANON_KEY=your-anon-key
 
-BREED_API_BASE_URL=http://dogbreeds.mooo.com
-BREED_API_BREEDS_PATH=/dogbreeds.php
+BREED_API_BASE_URL=http://dogbreeds.mooo.com/api
 BREED_API_TOKEN=your-static-bearer-token
 ```
 
@@ -248,13 +386,14 @@ lib/
 supabase/
   migrations/0001_init.sql
   functions/delete-account/index.ts
+server/        PHP REST API for breeds (see "Breed REST API")
 ```
 
 ### Two data sources, kept separate
 
 | | Breeds | Users, auth, favourites |
 | --- | --- | --- |
-| Backend | PHP + MySQL on Freehostia | Supabase (PostgreSQL) |
+| Backend | PHP REST API + MySQL on Freehostia | Supabase (PostgreSQL) |
 | Access | Read-only, static bearer token | Supabase Auth, per-user JWT |
 | Entry point | `BreedApiClient` | `SupabaseBootstrap` |
 
@@ -285,7 +424,10 @@ on one device.
 
 - Anon key only in the app; `service_role` lives solely in the Edge Function.
 - RLS on both tables, all four policies each.
-- Cleartext HTTP scoped to one domain, never global.
+- Cleartext HTTP scoped to one domain, never global (debug builds add `10.0.2.2`
+  for a local API).
+- The breed client only follows pagination links on the same scheme, host and
+  port, so a misbehaving server cannot redirect the bearer token elsewhere.
 - `changePassword` re-verifies the current password with `signInWithPassword`
   first. `updateUser(password:)` alone will change the password of anyone
   holding a live session without asking for the old one — on an unlocked phone
@@ -298,14 +440,32 @@ on one device.
 ## Tests
 
 ```bash
-flutter test
 flutter analyze
+flutter test                       # app: models, API client, widgets
+php server/tests/run_tests.php     # API: end-to-end HTTP checks
 ```
 
-Covers the two places most likely to break against a real backend: the
-`/*  */` prefix stripping, and `Breed.fromJson` against string-typed ids, null
-columns, the literal string `"null"`, and messy comma-separated temperaments.
-Widget tests check a breed card at 2× system text scale.
+**App.** `Breed.fromJson` against string-typed ids, null columns, the literal
+string `"null"` and messy temperaments; the breed client's paths, bearer header,
+pagination, same-origin link check and status-code handling (against a mocked
+server); widget tests at 2× text scale.
+
+**API.** Starts PHP's built-in server on a throwaway SQLite database and checks
+authentication and challenges, JSON content type and clean bodies, pagination
+and links, filtering (including literal `%`, `_` and `!` in searches), 400/404
+cases, 405 with `Allow` for every write method, OPTIONS preflight, HEAD, ETag and
+304, the `/api/index.php/...` form, a placeholder token (500), an unreachable
+database (503, no driver message leaked), and stray output before `<?php` being
+discarded.
+
+**Client against the real API.** Skipped unless pointed at a server:
+
+```powershell
+$env:PAWPEDIA_API_BASE_URL="http://127.0.0.1:8080/api"; $env:PAWPEDIA_API_TOKEN="dev-token"
+flutter test test/breed_api_live_test.dart
+```
+
+Use the Freehostia URL and your token to check the deployed API the same way.
 
 ### What was verified on the Pixel 6 emulator
 
