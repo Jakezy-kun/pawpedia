@@ -57,3 +57,6 @@ app.*.map.json
 server/config/config.php
 server/database/dev/
 upload-to-freehostia.zip
+
+.claude/
+
