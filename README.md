@@ -193,6 +193,19 @@ Written for **PHP 7.4**, which is what Freehostia runs (7.4.33). No PHP 8 syntax
    `BREED_API_BASE_URL` to `https://`. Until then the bearer token travels
    unencrypted, which is the API's biggest remaining weakness.
 
+### Fixing the photo links
+
+Every `picture` in the live database points at `via.placeholder.com`, a service
+that shut down — the domain no longer resolves, so no client can load those
+images. The app degrades to a paw placeholder, which is correct behaviour but
+not what you want on screen.
+
+[`server/database/fix_breed_data.sql`](server/database/fix_breed_data.sql)
+replaces all ten with free dog.ceo photos (each URL verified to return a real
+JPEG) and corrects row 9's name from "DChihuahua" to "Chihuahua". Paste it into
+phpMyAdmin's SQL tab. It writes only the `picture` and `breed_name` columns of
+rows matched by id, and adds or deletes nothing.
+
 ### DNS: FreeDNS → Freehostia
 
 `dogbreeds.mooo.com` needs an **A record** in FreeDNS pointing at the Freehostia

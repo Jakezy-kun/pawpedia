@@ -226,6 +226,12 @@ try {
     $r = isolated($work, array_merge($validConfig, ['table' => 'breeds; DROP TABLE breeds']), $auth);
     check('unsafe table name is rejected (500)', $r['status'] === 500);
 
+    // The most likely setup mistake: 'table' in config.php naming a table that
+    // is not there.
+    $r = isolated($work, array_merge($validConfig, ['table' => 'dog_breeds']), $auth);
+    check('wrong table name is 500 server_misconfigured', $r['status'] === 500 && ($r['json']['error']['code'] ?? '') === 'server_misconfigured', "got {$r['status']} " . ($r['json']['error']['code'] ?? ''));
+    check('wrong table name leaks no SQL detail', strpos($r['body'], 'dog_breeds') === false && strpos($r['body'], 'SQLSTATE') === false);
+
     // Reproduces the bug in the old endpoint: text outside <?php in an included
     // file. Here the config file starts with it.
     $r = isolated($work, $validConfig, $auth, '/*  */');

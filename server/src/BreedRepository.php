@@ -32,11 +32,15 @@ final class BreedRepository
      */
     public function find(int $id): ?array
     {
-        $statement = $this->pdo->prepare(
-            'SELECT ' . self::COLUMNS . ' FROM `' . $this->table . '` WHERE id = :id LIMIT 1'
-        );
-        $statement->bindValue(':id', $id, PDO::PARAM_INT);
-        $statement->execute();
+        try {
+            $statement = $this->pdo->prepare(
+                'SELECT ' . self::COLUMNS . ' FROM `' . $this->table . '` WHERE id = :id LIMIT 1'
+            );
+            $statement->bindValue(':id', $id, PDO::PARAM_INT);
+            $statement->execute();
+        } catch (PDOException $exception) {
+            throw self::translate($exception);
+        }
 
         $row = $statement->fetch();
 
@@ -71,25 +75,60 @@ final class BreedRepository
 
         $whereSql = $where === [] ? '' : ' WHERE ' . implode(' AND ', $where);
 
-        $count = $this->pdo->prepare('SELECT COUNT(*) FROM `' . $this->table . '`' . $whereSql);
-        foreach ($params as $name => $value) {
-            $count->bindValue($name, $value, PDO::PARAM_STR);
-        }
-        $count->execute();
-        $total = (int) $count->fetchColumn();
+        try {
+            $count = $this->pdo->prepare('SELECT COUNT(*) FROM `' . $this->table . '`' . $whereSql);
+            foreach ($params as $name => $value) {
+                $count->bindValue($name, $value, PDO::PARAM_STR);
+            }
+            $count->execute();
+            $total = (int) $count->fetchColumn();
 
-        $select = $this->pdo->prepare(
-            'SELECT ' . self::COLUMNS . ' FROM `' . $this->table . '`' . $whereSql
-            . ' ORDER BY breed_name ASC, id ASC LIMIT :limit OFFSET :offset'
-        );
-        foreach ($params as $name => $value) {
-            $select->bindValue($name, $value, PDO::PARAM_STR);
+            $select = $this->pdo->prepare(
+                'SELECT ' . self::COLUMNS . ' FROM `' . $this->table . '`' . $whereSql
+                . ' ORDER BY breed_name ASC, id ASC LIMIT :limit OFFSET :offset'
+            );
+            foreach ($params as $name => $value) {
+                $select->bindValue($name, $value, PDO::PARAM_STR);
+            }
+            $select->bindValue(':limit', $limit, PDO::PARAM_INT);
+            $select->bindValue(':offset', $offset, PDO::PARAM_INT);
+            $select->execute();
+        } catch (PDOException $exception) {
+            throw self::translate($exception);
         }
-        $select->bindValue(':limit', $limit, PDO::PARAM_INT);
-        $select->bindValue(':offset', $offset, PDO::PARAM_INT);
-        $select->execute();
 
         return ['items' => $select->fetchAll(), 'total' => $total];
+    }
+
+    /**
+     * Turns a driver error into the right HTTP failure.
+     *
+     * A wrong `table` or a renamed column in config.php is a setup mistake, not
+     * an outage, and saying so in the log is the difference between a five
+     * minute fix and an afternoon. The client still sees no driver detail.
+     */
+    private static function translate(PDOException $exception): ApiException
+    {
+        $sqlState = (string) $exception->getCode();
+        $message = $exception->getMessage();
+
+        $missingTable = $sqlState === '42S02'
+            || strpos($message, 'no such table') !== false
+            || strpos($message, "doesn't exist") !== false;
+        $missingColumn = $sqlState === '42S22'
+            || strpos($message, 'no such column') !== false
+            || strpos($message, 'Unknown column') !== false;
+
+        if ($missingTable || $missingColumn) {
+            error_log(
+                'PawPedia API: the breeds table or its columns do not match config.php. '
+                . 'Expected columns: ' . self::COLUMNS . '. Driver said: ' . $message
+            );
+            return ApiException::serverMisconfigured();
+        }
+
+        error_log('PawPedia API: query failed: ' . $message);
+        return ApiException::databaseUnavailable();
     }
 
     /**

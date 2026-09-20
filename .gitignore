@@ -56,3 +56,4 @@ app.*.map.json
 # PHP API credentials
 server/config/config.php
 server/database/dev/
+upload-to-freehostia.zip
