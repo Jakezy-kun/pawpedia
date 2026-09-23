@@ -4,6 +4,7 @@ import '../core/constants.dart';
 import '../core/errors/app_exception.dart';
 import '../core/errors/error_mapper.dart';
 import '../models/breed.dart';
+import '../models/breed_draft.dart';
 import '../services/breed_api_service.dart';
 
 enum BreedLoadState { idle, loading, ready, error }
@@ -61,6 +62,56 @@ class BreedProvider extends ChangeNotifier {
     }
     notifyListeners();
   }
+
+  /// Adding, editing and deleting need the live API; the seed file is
+  /// read-only.
+  bool get canEdit => !_service.isUsingSeedData;
+
+  // --- writes ---------------------------------------------------------------
+  //
+  // Each write waits for the server before touching the list, unlike the
+  // optimistic favourite toggle: the server assigns ids and may reject the
+  // input, and a breed that appears and then vanishes is worse than a short
+  // spinner. Errors reach the caller as AppException for the form to show.
+
+  Future<Breed> create(BreedDraft draft) async {
+    final Breed created = await _guard(() => _service.createBreed(draft));
+    _breeds = _sorted(<Breed>[..._breeds, created]);
+    notifyListeners();
+    return created;
+  }
+
+  Future<Breed> update(int id, BreedDraft draft) async {
+    final Breed updated = await _guard(() => _service.updateBreed(id, draft));
+    _breeds = _sorted(<Breed>[
+      for (final Breed breed in _breeds)
+        if (breed.id == id) updated else breed,
+    ]);
+    notifyListeners();
+    return updated;
+  }
+
+  Future<void> delete(int id) async {
+    await _guard(() => _service.deleteBreed(id));
+    _breeds = _breeds.where((Breed breed) => breed.id != id).toList();
+    notifyListeners();
+  }
+
+  static Future<T> _guard<T>(Future<T> Function() write) async {
+    try {
+      return await write();
+    } catch (error) {
+      throw ErrorMapper.fromGenericError(error);
+    }
+  }
+
+  /// The server's order (name, then id), so a new or renamed breed lands
+  /// where the next full reload would put it.
+  static List<Breed> _sorted(List<Breed> breeds) => breeds
+    ..sort((Breed a, Breed b) {
+      final int byName = a.name.toLowerCase().compareTo(b.name.toLowerCase());
+      return byName != 0 ? byName : a.id.compareTo(b.id);
+    });
 
   Breed? byId(int id) {
     for (final Breed breed in _breeds) {

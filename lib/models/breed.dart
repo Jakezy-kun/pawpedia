@@ -19,6 +19,12 @@ class Breed {
     required this.picture,
   });
 
+  /// Shown when a breed has no group. Not a real group name.
+  static const String unknownGroup = 'Unclassified';
+
+  /// Shown for a missing origin or lifespan.
+  static const String unknownValue = 'Unknown';
+
   final int id;
   final String name;
   final String group;
@@ -35,9 +41,10 @@ class Breed {
     return Breed(
       id: _asInt(json['id']),
       name: _asString(json['breed_name'], fallback: 'Unknown breed'),
-      group: _asString(json['breed_group'], fallback: 'Unclassified'),
-      originCountry: _asString(json['origin_country'], fallback: 'Unknown'),
-      averageLifespan: _asString(json['average_lifespan'], fallback: 'Unknown'),
+      group: _asString(json['breed_group'], fallback: unknownGroup),
+      originCountry: _asString(json['origin_country'], fallback: unknownValue),
+      averageLifespan:
+          _asString(json['average_lifespan'], fallback: unknownValue),
       temperament: _splitTemperament(json['temperament']),
       picture: _asString(json['picture']),
     );
@@ -57,7 +64,7 @@ class Breed {
   /// rather than stored, because the API has no description column.
   String get summary {
     final StringBuffer buffer = StringBuffer('The $name is a $group group breed');
-    if (originCountry.isNotEmpty && originCountry != 'Unknown') {
+    if (originCountry.isNotEmpty && originCountry != unknownValue) {
       buffer.write(' from $originCountry');
     }
     if (temperament.isNotEmpty) {
@@ -68,7 +75,7 @@ class Breed {
       buffer.write(', best known for being $phrase');
     }
     buffer.write('.');
-    if (averageLifespan.isNotEmpty && averageLifespan != 'Unknown') {
+    if (averageLifespan.isNotEmpty && averageLifespan != unknownValue) {
       buffer.write(' Most live around $averageLifespan.');
     }
     return buffer.toString();

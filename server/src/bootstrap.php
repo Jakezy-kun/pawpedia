@@ -53,8 +53,17 @@ function pawpedia_run(string $appRoot): void
         $router->get('#^/breeds$#', static function (Request $request) use ($breeds): void {
             $breeds()->index($request);
         });
+        $router->post('#^/breeds$#', static function (Request $request) use ($breeds): void {
+            $breeds()->store($request);
+        });
         $router->get('#^/breeds/(?P<id>[^/]+)$#', static function (Request $request, array $params) use ($breeds): void {
             $breeds()->show($request, $params);
+        });
+        $router->put('#^/breeds/(?P<id>[^/]+)$#', static function (Request $request, array $params) use ($breeds): void {
+            $breeds()->update($request, $params);
+        });
+        $router->delete('#^/breeds/(?P<id>[^/]+)$#', static function (Request $request, array $params) use ($breeds): void {
+            $breeds()->destroy($request, $params);
         });
 
         $auth = new Auth((string) ($config['api_token'] ?? ''));

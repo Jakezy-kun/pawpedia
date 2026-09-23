@@ -10,10 +10,13 @@ import '../constants.dart';
 import '../errors/app_exception.dart';
 import 'json_sanitizer.dart';
 
-/// Client for the read-only PawPedia breed REST API (see `server/`).
+/// Client for the PawPedia breed REST API (see `server/`).
 ///
-///   GET {base}/breeds        paginated collection: { data, meta, links }
-///   GET {base}/breeds/{id}   one breed:            { data, links }
+///   GET    {base}/breeds        paginated collection: { data, meta, links }
+///   GET    {base}/breeds/{id}   one breed:            { data, links }
+///   POST   {base}/breeds        create -> 201         { data, links }
+///   PUT    {base}/breeds/{id}   replace -> 200        { data, links }
+///   DELETE {base}/breeds/{id}   remove -> 204         (no body)
 ///
 /// Errors arrive as `{ "error": { "status", "code", "message" } }` with a
 /// matching HTTP status, so the status code alone decides how a failure is
@@ -82,6 +85,41 @@ class BreedApiClient {
     }
   }
 
+  /// Creates a breed and returns it as stored, including its new id.
+  ///
+  /// [fields] uses the API's names (`breed_name`, `breed_group`, ...).
+  Future<Map<String, dynamic>> createBreed(Map<String, dynamic> fields) async {
+    final Object? body = await _send('POST', _resource('breeds'), json: fields);
+    return _asRow(body);
+  }
+
+  /// Replaces every field of one breed and returns it as stored.
+  Future<Map<String, dynamic>> updateBreed(
+    int id,
+    Map<String, dynamic> fields,
+  ) async {
+    try {
+      final Object? body =
+          await _send('PUT', _resource('breeds/$id'), json: fields);
+      return _asRow(body);
+    } on _NotFound {
+      throw const AppException(
+        'This breed no longer exists. Pull down on Explore to refresh.',
+        kind: AppErrorKind.validation,
+      );
+    }
+  }
+
+  /// Deletes one breed. A 404 counts as success: the breed is gone either way,
+  /// which is all the caller asked for.
+  Future<void> deleteBreed(int id) async {
+    try {
+      await _send('DELETE', _resource('breeds/$id'));
+    } on _NotFound {
+      return;
+    }
+  }
+
   /// `{base}/{path}`, keeping any path the base URL already has (`/api`).
   Uri _resource(String path) {
     final Uri base = Uri.parse(_baseUrl);
@@ -110,7 +148,15 @@ class BreedApiClient {
     return resolved;
   }
 
-  Future<Object?> _get(Uri uri) async {
+  Future<Object?> _get(Uri uri) => _send('GET', uri);
+
+  /// One request. Returns the decoded body of a 2xx answer (null for 204) and
+  /// turns every other status into an [AppException].
+  Future<Object?> _send(
+    String method,
+    Uri uri, {
+    Map<String, dynamic>? json,
+  }) async {
     if (_token.isEmpty) {
       throw const AppException(
         'The breed API token is missing from .env.',
@@ -118,15 +164,22 @@ class BreedApiClient {
       );
     }
 
+    final http.Request request = http.Request(method, uri)
+      ..headers.addAll(<String, String>{
+        'Authorization': 'Bearer $_token',
+        'Accept': 'application/json',
+      });
+    if (json != null) {
+      request.headers['Content-Type'] = 'application/json; charset=utf-8';
+      request.body = jsonEncode(json);
+    }
+
     late final http.Response response;
     try {
-      response = await _http.get(
-        uri,
-        headers: <String, String>{
-          'Authorization': 'Bearer $_token',
-          'Accept': 'application/json',
-        },
-      ).timeout(AppDurations.networkTimeout);
+      response = await _http
+          .send(request)
+          .then(http.Response.fromStream)
+          .timeout(AppDurations.networkTimeout);
     } on TimeoutException {
       throw const AppException(
         'The breed service took too long to respond.',
@@ -146,7 +199,7 @@ class BreedApiClient {
 
     final Object? body = _decode(response, uri);
 
-    if (response.statusCode == 200) return body;
+    if (_isSuccess(response.statusCode)) return body;
 
     if (kDebugMode) {
       debugPrint('PawPedia: breed API ${response.statusCode} for $uri: '
@@ -177,6 +230,35 @@ class BreedApiClient {
           'The breed service rejected the request.',
           kind: AppErrorKind.parsing,
         );
+      case 405:
+        throw const AppException(
+          'The breed service does not accept changes yet. Upload the latest '
+          'server/ files to the host.',
+          kind: AppErrorKind.apiAuth,
+        );
+      case 409:
+        final String message =
+            _errorMessage(body) ?? 'A breed with that name already exists.';
+        // The only conflict the API reports is a duplicate name.
+        throw AppException(
+          message,
+          kind: AppErrorKind.validation,
+          fieldErrors: <String, String>{'breed_name': message},
+        );
+      case 413:
+        throw const AppException(
+          'That is too much text to save. Please shorten it.',
+          kind: AppErrorKind.validation,
+        );
+      case 422:
+        final Map<String, String> fields = _fieldErrors(body);
+        // "_" is a failure no single field owns, e.g. a column narrower than
+        // the API expected.
+        throw AppException(
+          fields['_'] ?? 'Please fix the highlighted fields.',
+          kind: AppErrorKind.validation,
+          fieldErrors: fields,
+        );
       case 503:
         throw const AppException(
           'The breed service is temporarily unavailable. Please try again.',
@@ -198,7 +280,7 @@ class BreedApiClient {
       // misconfigured host prepending output, which the old endpoint did.
       return jsonDecode(JsonSanitizer.clean(text));
     } on FormatException {
-      if (response.statusCode != 200) return null;
+      if (!_isSuccess(response.statusCode)) return null;
       if (kDebugMode) debugPrint('PawPedia: unparseable breed response from $uri');
       throw const AppException(
         'The breed service sent something we could not read.',
@@ -207,10 +289,39 @@ class BreedApiClient {
     }
   }
 
+  static bool _isSuccess(int status) => status >= 200 && status < 300;
+
   static String? _errorCode(Object? body) {
     final Object? error = body is Map ? body['error'] : null;
     final Object? code = error is Map ? error['code'] : null;
     return code is String ? code : null;
+  }
+
+  static String? _errorMessage(Object? body) {
+    final Object? error = body is Map ? body['error'] : null;
+    final Object? message = error is Map ? error['message'] : null;
+    return message is String && message.isNotEmpty ? message : null;
+  }
+
+  static Map<String, String> _fieldErrors(Object? body) {
+    final Object? error = body is Map ? body['error'] : null;
+    final Object? fields = error is Map ? error['fields'] : null;
+    if (fields is! Map) return const <String, String>{};
+    return <String, String>{
+      for (final MapEntry<dynamic, dynamic> entry in fields.entries)
+        if (entry.value is String) entry.key.toString(): entry.value as String,
+    };
+  }
+
+  static Map<String, dynamic> _asRow(Object? body) {
+    final Object? data = body is Map ? body['data'] : null;
+    if (data is! Map) {
+      throw const AppException(
+        'The breed service sent an unexpected response.',
+        kind: AppErrorKind.parsing,
+      );
+    }
+    return data.cast<String, dynamic>();
   }
 
   static List<Map<String, dynamic>> _asRowList(Object? body) {

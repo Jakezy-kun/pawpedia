@@ -54,19 +54,49 @@ final class Response
     {
         self::send(204, null, [
             'Allow' => implode(', ', $allowed),
+            'Access-Control-Allow-Methods' => implode(', ', $allowed),
             'Access-Control-Max-Age' => '86400',
             'Cache-Control' => 'no-store',
         ]);
     }
 
+    /**
+     * 201 for a newly created resource, pointing at it with Location.
+     *
+     * @param array<string, mixed> $payload
+     */
+    public static function created(array $payload, string $location): void
+    {
+        self::send(201, self::encode($payload), [
+            'Location' => $location,
+            'Cache-Control' => 'no-store',
+        ]);
+    }
+
+    /**
+     * The result of a successful write. Never cached: it describes a change,
+     * not a representation to reuse.
+     *
+     * @param array<string, mixed> $payload
+     */
+    public static function written(array $payload): void
+    {
+        self::send(200, self::encode($payload), ['Cache-Control' => 'no-store']);
+    }
+
+    public static function noContent(): void
+    {
+        self::send(204, null, ['Cache-Control' => 'no-store']);
+    }
+
     public static function error(ApiException $error): void
     {
         $body = self::encode([
-            'error' => [
+            'error' => array_merge([
                 'status' => $error->status(),
                 'code' => $error->errorCode(),
                 'message' => $error->getMessage(),
-            ],
+            ], $error->details()),
         ]);
 
         self::send(
@@ -95,10 +125,10 @@ final class Response
                 // Responses differ per token, so shared caches must not mix them.
                 'Vary' => 'Authorization',
                 'Access-Control-Allow-Origin' => self::$corsOrigin,
-                // Read-only API: advertise only what it actually supports.
-                'Access-Control-Allow-Methods' => 'GET, HEAD, OPTIONS',
-                'Access-Control-Allow-Headers' => 'Authorization, Content-Type, If-None-Match',
-                'Access-Control-Expose-Headers' => 'ETag',
+                // Narrowed to the route's own methods on an OPTIONS preflight.
+                'Access-Control-Allow-Methods' => 'GET, HEAD, POST, PUT, DELETE, OPTIONS',
+                'Access-Control-Allow-Headers' => 'Authorization, Content-Type, If-None-Match, X-HTTP-Method-Override',
+                'Access-Control-Expose-Headers' => 'ETag, Location',
             ];
 
             foreach (array_merge($base, $headers) as $name => $value) {

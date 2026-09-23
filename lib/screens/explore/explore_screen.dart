@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../../core/favorite_actions.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/ui_feedback.dart';
 import '../../models/breed.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/breed_provider.dart';
@@ -14,7 +15,9 @@ import '../../widgets/breed_card.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/featured_breed_card.dart';
 import '../../widgets/loading_skeleton.dart';
+import '../../widgets/random_dog_card.dart';
 import '../breed_detail/breed_detail_screen.dart';
+import '../breed_form/breed_form_screen.dart';
 import '../shell/main_shell.dart';
 
 /// The home tab: greeting, search entry point, group filter, Breed of the Day,
@@ -31,12 +34,41 @@ class _ExploreScreenState extends State<ExploreScreen> {
   /// lives on the Search tab.
   String? _selectedGroup;
 
+  /// Opens the Add form (POST). The provider inserts the new breed, so the
+  /// list below updates on its own.
+  Future<void> _addBreed() async {
+    final Breed? created = await BreedFormScreen.open(context);
+    if (created == null || !mounted) return;
+
+    // Make sure the new breed is actually visible under the current filter.
+    if (_selectedGroup != null && _selectedGroup != created.group) {
+      setState(() => _selectedGroup = null);
+    }
+    context.showSnack(
+      '${created.name} added',
+      action: SnackBarAction(
+        label: 'VIEW',
+        onPressed: () => BreedDetailScreen.open(context, created),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final BreedProvider breeds = context.watch<BreedProvider>();
     final TextTheme text = Theme.of(context).textTheme;
 
     return Scaffold(
+      floatingActionButton:
+          breeds.canEdit && breeds.state == BreedLoadState.ready
+              ? FloatingActionButton.extended(
+                  onPressed: _addBreed,
+                  icon: const Icon(Icons.add_rounded),
+                  label: const Text('Add breed'),
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: AppColors.textPrimary,
+                )
+              : null,
       body: SafeArea(
         bottom: false,
         child: RefreshIndicator(
@@ -79,23 +111,6 @@ class _ExploreScreenState extends State<ExploreScreen> {
           ),
         ),
 
-        if (breeds.isUsingSeedData)
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(
-                AppSpacing.screen,
-                0,
-                AppSpacing.screen,
-                AppSpacing.lg,
-              ),
-              child: const InfoBanner(
-                message:
-                    'Showing sample breeds. Add BREED_API_TOKEN to .env to load '
-                    'the live catalogue.',
-              ),
-            ),
-          ),
-
         if (breeds.state == BreedLoadState.ready && breeds.breeds.isNotEmpty)
           SliverToBoxAdapter(child: _GroupChips(
             counts: breeds.groupCounts,
@@ -107,8 +122,10 @@ class _ExploreScreenState extends State<ExploreScreen> {
 
         ..._buildContent(context, breeds, visible, text),
 
-        // Clears the bottom navigation bar.
-        const SliverToBoxAdapter(child: SizedBox(height: AppSpacing.xl)),
+        // Clears the bottom navigation bar, and the Add button when shown.
+        SliverToBoxAdapter(
+          child: SizedBox(height: AppSpacing.xl + (breeds.canEdit ? 72 : 0)),
+        ),
       ],
     );
   }
@@ -176,6 +193,18 @@ class _ExploreScreenState extends State<ExploreScreen> {
                   0,
                 ),
                 child: _FeaturedSection(breed: breeds.breedOfTheDay!),
+              ),
+            ),
+          if (_selectedGroup == null)
+            const SliverToBoxAdapter(
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(
+                  AppSpacing.screen,
+                  AppSpacing.xl,
+                  AppSpacing.screen,
+                  0,
+                ),
+                child: RandomDogCard(),
               ),
             ),
           SliverToBoxAdapter(

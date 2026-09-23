@@ -12,6 +12,7 @@ import 'providers/favorites_provider.dart';
 import 'providers/profile_provider.dart';
 import 'providers/stats_provider.dart';
 import 'screens/auth_gate.dart';
+import 'services/dog_photo_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -60,6 +61,12 @@ class PawPediaApp extends StatelessWidget {
         ),
         ChangeNotifierProvider<StatsProvider>(
           create: (_) => StatsProvider()..initialise(),
+        ),
+        // The third-party Dog CEO API. One instance, so its breed list is
+        // fetched once per launch rather than once per screen.
+        Provider<DogPhotoService>(
+          create: (_) => DogPhotoService(),
+          dispose: (_, DogPhotoService service) => service.dispose(),
         ),
 
         // Favourites and profile follow whoever is signed in. Wiring them

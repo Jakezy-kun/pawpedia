@@ -18,14 +18,23 @@ final class ApiException extends RuntimeException
     private array $headers;
 
     /**
-     * @param array<string, string> $headers
+     * Extra members merged into the error body, e.g. per-field messages.
+     *
+     * @var array<string, mixed>
      */
-    public function __construct(int $status, string $errorCode, string $message, array $headers = [])
+    private array $details;
+
+    /**
+     * @param array<string, string> $headers
+     * @param array<string, mixed>  $details
+     */
+    public function __construct(int $status, string $errorCode, string $message, array $headers = [], array $details = [])
     {
         parent::__construct($message);
         $this->status = $status;
         $this->errorCode = $errorCode;
         $this->headers = $headers;
+        $this->details = $details;
     }
 
     public function status(): int
@@ -44,9 +53,15 @@ final class ApiException extends RuntimeException
         return $this->headers;
     }
 
-    public static function badRequest(string $message): self
+    /** @return array<string, mixed> */
+    public function details(): array
     {
-        return new self(400, 'invalid_parameter', $message);
+        return $this->details;
+    }
+
+    public static function badRequest(string $message, string $code = 'invalid_parameter'): self
+    {
+        return new self(400, $code, $message);
     }
 
     /**
@@ -81,9 +96,36 @@ final class ApiException extends RuntimeException
         return new self(
             405,
             'method_not_allowed',
-            'This resource is read-only. Allowed methods: ' . implode(', ', $allowed) . '.',
+            'Allowed methods for this resource: ' . implode(', ', $allowed) . '.',
             ['Allow' => implode(', ', $allowed)]
         );
+    }
+
+    public static function conflict(string $code, string $message): self
+    {
+        return new self(409, $code, $message);
+    }
+
+    public static function payloadTooLarge(int $maxBytes): self
+    {
+        return new self(413, 'payload_too_large', "The request body must be at most {$maxBytes} bytes.");
+    }
+
+    public static function unsupportedMediaType(): self
+    {
+        return new self(415, 'unsupported_media_type', 'Send the request body as JSON with Content-Type: application/json.');
+    }
+
+    /**
+     * The body parsed, but its values break the resource's rules. `fields`
+     * names each offending member so a client can show the message beside the
+     * right input.
+     *
+     * @param array<string, string> $fields field name => message
+     */
+    public static function validationFailed(array $fields): self
+    {
+        return new self(422, 'validation_failed', 'Some fields are invalid.', [], ['fields' => $fields]);
     }
 
     public static function serverMisconfigured(): self

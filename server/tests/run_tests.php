@@ -27,14 +27,16 @@ $work = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'pawpedia-api-tests-' . getmy
 $dbPath = $work . DIRECTORY_SEPARATOR . 'breeds.sqlite';
 @unlink($dbPath);
 $pdo = new PDO('sqlite:' . $dbPath, null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+// Every column NOT NULL, like the live Freehostia table: an INSERT carrying a
+// NULL fails there, so the tests must fail the same way.
 $pdo->exec('CREATE TABLE breeds (
     id INTEGER PRIMARY KEY,
     breed_name TEXT NOT NULL,
-    breed_group TEXT,
-    origin_country TEXT,
-    average_lifespan TEXT,
-    temperament TEXT,
-    picture TEXT
+    breed_group TEXT NOT NULL,
+    origin_country TEXT NOT NULL,
+    average_lifespan TEXT NOT NULL,
+    temperament TEXT NOT NULL,
+    picture TEXT NOT NULL
 )');
 
 $seed = json_decode((string) file_get_contents($projectRoot . '/assets/seed/breeds.json'), true);
@@ -121,7 +123,7 @@ try {
     check('nosniff header present', ($r['h']['x-content-type-options'] ?? '') === 'nosniff');
     check('ETag present', isset($r['h']['etag']));
     check('private cache header', strpos((string) ($r['h']['cache-control'] ?? ''), 'private') === 0);
-    check('CORS advertises read methods only', ($r['h']['access-control-allow-methods'] ?? '') === 'GET, HEAD, OPTIONS');
+    check('CORS advertises the CRUD methods', ($r['h']['access-control-allow-methods'] ?? '') === 'GET, HEAD, POST, PUT, DELETE, OPTIONS');
     check('returns all 10 rows', count($r['json']['data'] ?? []) === 10);
     check('meta.total is 10', ($r['json']['meta']['total'] ?? null) === 10);
     check('sorted by name (Beagle first)', ($r['json']['data'][0]['breed_name'] ?? null) === 'Beagle');
@@ -183,14 +185,22 @@ try {
     check('over-long search is 400', $r['status'] === 400);
 
     echo "\nMethods, routing and caching\n";
-    foreach (['POST', 'PUT', 'PATCH', 'DELETE'] as $method) {
+    foreach (['POST', 'PATCH'] as $method) {
         $r = call($method, '/api/breeds/1', $auth);
-        check("{$method} is 405", $r['status'] === 405, "got {$r['status']}");
-        check("{$method} 405 sends Allow", ($r['h']['allow'] ?? '') === 'GET, HEAD, OPTIONS');
+        check("{$method} /breeds/1 is 405", $r['status'] === 405, "got {$r['status']}");
+        check("{$method} /breeds/1 405 sends Allow", ($r['h']['allow'] ?? '') === 'GET, HEAD, PUT, DELETE, OPTIONS', (string) ($r['h']['allow'] ?? ''));
+    }
+    foreach (['PUT', 'PATCH', 'DELETE'] as $method) {
+        $r = call($method, '/api/breeds', $auth);
+        check("{$method} /breeds is 405", $r['status'] === 405, "got {$r['status']}");
+        check("{$method} /breeds 405 sends Allow", ($r['h']['allow'] ?? '') === 'GET, HEAD, POST, OPTIONS', (string) ($r['h']['allow'] ?? ''));
     }
     $r = call('OPTIONS', '/api/breeds');
     check('OPTIONS preflight is 204 without a token', $r['status'] === 204);
-    check('OPTIONS sends Allow', ($r['h']['allow'] ?? '') === 'GET, HEAD, OPTIONS');
+    check('OPTIONS sends Allow', ($r['h']['allow'] ?? '') === 'GET, HEAD, POST, OPTIONS');
+    check('OPTIONS narrows CORS methods to the route', ($r['h']['access-control-allow-methods'] ?? '') === 'GET, HEAD, POST, OPTIONS');
+    $r = call('OPTIONS', '/api/breeds/1');
+    check('OPTIONS on an item allows PUT and DELETE', ($r['h']['allow'] ?? '') === 'GET, HEAD, PUT, DELETE, OPTIONS');
     $r = call('GET', '/api/nothing-here', $auth);
     check('unknown route is 404 route_not_found', $r['status'] === 404 && $r['json']['error']['code'] === 'route_not_found');
     $r = call('GET', '/api/breeds/', $auth);
@@ -209,6 +219,109 @@ try {
     $r = call('GET', '/api/index.php/breeds/1', $auth);
     check('works without mod_rewrite via /api/index.php/...', $r['status'] === 200);
     check('links follow the form the client used', ($r['json']['links']['self'] ?? '') === '/api/index.php/breeds/1', (string) ($r['json']['links']['self'] ?? ''));
+
+    echo "\nCreate: POST /api/breeds\n";
+    $json = array_merge($auth, ['Content-Type: application/json']);
+    $newBreed = [
+        'breed_name' => '  Shiba Inu ',
+        'breed_group' => 'Non-Sporting',
+        'origin_country' => 'Japan',
+        'average_lifespan' => '12-15 years',
+        'temperament' => 'Alert, Bold, Loyal',
+        'picture' => 'https://images.dog.ceo/breeds/shiba/shiba-1.jpg',
+    ];
+
+    $r = call('POST', '/api/breeds', ['Content-Type: application/json'], json_encode($newBreed));
+    check('POST without a token is 401', $r['status'] === 401, "got {$r['status']}");
+
+    $r = call('POST', '/api/breeds', $json, json_encode($newBreed));
+    check('201 Created', $r['status'] === 201, "got {$r['status']} " . $r['body']);
+    $newId = (int) ($r['json']['data']['id'] ?? 0);
+    check('returns the new integer id', $newId > 10, (string) $newId);
+    check('Location points at the new breed', ($r['h']['location'] ?? '') === '/api/breeds/' . $newId, (string) ($r['h']['location'] ?? ''));
+    check('values are trimmed', ($r['json']['data']['breed_name'] ?? '') === 'Shiba Inu');
+    check('201 is not cacheable', ($r['h']['cache-control'] ?? '') === 'no-store');
+    $r = call('GET', '/api/breeds/' . $newId, $auth);
+    check('the new breed can be read back', $r['status'] === 200 && $r['json']['data']['origin_country'] === 'Japan');
+    $r = call('GET', '/api/breeds', $auth);
+    check('the collection now has 11 rows', ($r['json']['meta']['total'] ?? 0) === 11);
+
+    $r = call('POST', '/api/breeds', $json, json_encode(['breed_name' => 'Minimal Mutt']));
+    check('only breed_name is required', $r['status'] === 201, "got {$r['status']} " . $r['body']);
+    $minimalId = (int) ($r['json']['data']['id'] ?? 0);
+    check('omitted fields read back as null', array_key_exists('picture', $r['json']['data'] ?? []) && $r['json']['data']['picture'] === null);
+
+    $r = call('POST', '/api/breeds', $json, json_encode(['breed_name' => 'GOLDEN RETRIEVER']));
+    check('duplicate name (any case) is 409 breed_exists', $r['status'] === 409 && ($r['json']['error']['code'] ?? '') === 'breed_exists', "got {$r['status']}");
+
+    $r = call('POST', '/api/breeds', $json, json_encode(['breed_group' => 'Toy']));
+    check('missing breed_name is 422 validation_failed', $r['status'] === 422 && ($r['json']['error']['code'] ?? '') === 'validation_failed', "got {$r['status']}");
+    check('422 names the field', isset($r['json']['error']['fields']['breed_name']));
+
+    $r = call('POST', '/api/breeds', $json, json_encode(['breed_name' => '   ']));
+    check('blank breed_name is 422', $r['status'] === 422);
+
+    $r = call('POST', '/api/breeds', $json, json_encode([
+        'breed_name' => str_repeat('a', 121),
+        'picture' => 'javascript:alert(1)',
+        'breed_group' => 7,
+        'colour' => 'red',
+    ]));
+    check('every bad field is reported at once', $r['status'] === 422
+        && array_keys($r['json']['error']['fields'] ?? []) == ['colour', 'breed_name', 'breed_group', 'picture'],
+        implode(',', array_keys($r['json']['error']['fields'] ?? [])));
+
+    $r = call('POST', '/api/breeds', $json, '{"breed_name": "Oops",');
+    check('malformed JSON is 400 invalid_json', $r['status'] === 400 && ($r['json']['error']['code'] ?? '') === 'invalid_json', "got {$r['status']}");
+    $r = call('POST', '/api/breeds', $json, '["Beagle"]');
+    check('a JSON list is 400 invalid_json', $r['status'] === 400 && ($r['json']['error']['code'] ?? '') === 'invalid_json');
+    $r = call('POST', '/api/breeds', array_merge($auth, ['Content-Type: application/x-www-form-urlencoded']), 'breed_name=Form+Dog');
+    check('a non-JSON body is 415', $r['status'] === 415, "got {$r['status']}");
+    $r = call('POST', '/api/breeds', $json, json_encode(['breed_name' => str_repeat('a', 20000)]));
+    check('an oversized body is 413', $r['status'] === 413, "got {$r['status']}");
+
+    echo "\nUpdate: PUT /api/breeds/{id}\n";
+    $changed = array_merge($newBreed, ['breed_name' => 'Shiba', 'average_lifespan' => '13-16 years']);
+    $r = call('PUT', '/api/breeds/' . $newId, $json, json_encode($changed));
+    check('200 OK', $r['status'] === 200, "got {$r['status']} " . $r['body']);
+    check('returns the updated breed', ($r['json']['data']['breed_name'] ?? '') === 'Shiba' && $r['json']['data']['average_lifespan'] === '13-16 years');
+    $r = call('GET', '/api/breeds/' . $newId, $auth);
+    check('the change is stored', ($r['json']['data']['breed_name'] ?? '') === 'Shiba');
+
+    $r = call('PUT', '/api/breeds/' . $newId, $json, json_encode(array_merge($changed, ['id' => $newId])));
+    check('keeping its own name (and echoing id) is allowed', $r['status'] === 200, "got {$r['status']} " . $r['body']);
+    $r = call('PUT', '/api/breeds/' . $newId, $json, json_encode(['breed_name' => 'Shiba']));
+    check('PUT replaces: omitted fields are cleared', $r['status'] === 200 && $r['json']['data']['origin_country'] === null);
+    $r = call('PUT', '/api/breeds/' . $newId, $json, json_encode(['breed_name' => 'beagle']));
+    check('renaming onto another breed is 409', $r['status'] === 409, "got {$r['status']}");
+    $r = call('PUT', '/api/breeds/' . $newId, $json, json_encode(['breed_name' => '']));
+    check('invalid PUT is 422', $r['status'] === 422, "got {$r['status']}");
+    $r = call('PUT', '/api/breeds/999', $json, json_encode(['breed_name' => 'Ghost']));
+    check('PUT to an unknown id is 404', $r['status'] === 404 && ($r['json']['error']['code'] ?? '') === 'breed_not_found', "got {$r['status']}");
+    $r = call('PUT', '/api/breeds/abc', $json, json_encode(['breed_name' => 'Ghost']));
+    check('PUT to a non-integer id is 400', $r['status'] === 400, "got {$r['status']}");
+    $r = call('PUT', '/api/breeds/' . $newId, ['Content-Type: application/json'], json_encode($changed));
+    check('PUT without a token is 401', $r['status'] === 401, "got {$r['status']}");
+    $r = call('POST', '/api/breeds/' . $newId, array_merge($json, ['X-HTTP-Method-Override: PUT']), json_encode($newBreed));
+    check('POST + X-HTTP-Method-Override: PUT updates', $r['status'] === 200 && ($r['json']['data']['breed_name'] ?? '') === 'Shiba Inu', "got {$r['status']}");
+    $r = call('GET', '/api/breeds/' . $newId, array_merge($auth, ['X-HTTP-Method-Override: DELETE']));
+    check('GET cannot be overridden into a write', $r['status'] === 200);
+
+    echo "\nDelete: DELETE /api/breeds/{id}\n";
+    $r = call('DELETE', '/api/breeds/' . $newId);
+    check('DELETE without a token is 401', $r['status'] === 401, "got {$r['status']}");
+    $r = call('DELETE', '/api/breeds/' . $newId, $auth);
+    check('204 No Content', $r['status'] === 204, "got {$r['status']}");
+    check('204 has no body', $r['body'] === '');
+    $r = call('GET', '/api/breeds/' . $newId, $auth);
+    check('the deleted breed is gone (404)', $r['status'] === 404);
+    $r = call('DELETE', '/api/breeds/' . $newId, $auth);
+    check('deleting it again is 404', $r['status'] === 404);
+    $r = call('POST', '/api/breeds/' . $minimalId, array_merge($auth, ['X-HTTP-Method-Override: DELETE']));
+    check('POST + X-HTTP-Method-Override: DELETE deletes', $r['status'] === 204, "got {$r['status']}");
+    $r = call('GET', '/api/breeds', $auth);
+    check('the collection is back to 10 rows', ($r['json']['meta']['total'] ?? 0) === 10);
+
     echo "\nServer configuration failures\n";
     $validConfig = [
         'db' => ['dsn' => 'sqlite:' . $dbPath],
@@ -259,15 +372,19 @@ exit(0);
  * @param list<string> $headers
  * @return array{status: int, h: array<string, string>, body: string, json: mixed}
  */
-function call(string $method, string $path, array $headers = []): array
+function call(string $method, string $path, array $headers = [], ?string $body = null): array
 {
     global $base;
-    $context = stream_context_create(['http' => [
+    $options = [
         'method' => $method,
         'header' => implode("\r\n", $headers),
         'ignore_errors' => true,
         'timeout' => 10,
-    ]]);
+    ];
+    if ($body !== null) {
+        $options['content'] = $body;
+    }
+    $context = stream_context_create(['http' => $options]);
 
     $body = @file_get_contents($base . $path, false, $context);
     $raw = $http_response_header ?? [];

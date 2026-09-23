@@ -231,6 +231,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     children: <Widget>[
                       if (_isSignUp) ...<Widget>[
                         AppTextField(
+                          key: const ValueKey<String>('name'),
                           label: 'Name',
                           controller: _name,
                           hint: 'Riley Parker',
@@ -241,7 +242,12 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                         const SizedBox(height: AppSpacing.lg),
                       ],
+                      // Keyed so that Name appearing above them in Sign up
+                      // mode cannot shift each field onto its neighbour's
+                      // state — that is how Email inherited Password's
+                      // obscured text.
                       AppTextField(
+                        key: const ValueKey<String>('email'),
                         label: 'Email',
                         controller: _email,
                         hint: 'you@example.com',
@@ -253,6 +259,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                       const SizedBox(height: AppSpacing.lg),
                       AppTextField(
+                        key: const ValueKey<String>('password'),
                         label: 'Password',
                         controller: _password,
                         hint: 'At least 8 characters',

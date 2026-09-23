@@ -5,8 +5,11 @@ declare(strict_types=1);
 /**
  * The /breeds resource.
  *
- *   GET /breeds          collection, filterable and paginated
- *   GET /breeds/{id}     one breed
+ *   GET    /breeds          collection, filterable and paginated
+ *   GET    /breeds/{id}     one breed
+ *   POST   /breeds          create a breed     -> 201 + Location
+ *   PUT    /breeds/{id}     replace a breed    -> 200
+ *   DELETE /breeds/{id}     remove a breed     -> 204
  */
 final class BreedController
 {
@@ -14,6 +17,19 @@ final class BreedController
     public const MAX_PER_PAGE = 100;
     private const MAX_SEARCH_LENGTH = 100;
     private const MAX_LIST_VALUES = 20;
+
+    /**
+     * Longest value accepted per writable field, matching database/schema.sql.
+     * Only breed_name is required.
+     */
+    private const FIELD_LIMITS = [
+        'breed_name' => 120,
+        'breed_group' => 60,
+        'origin_country' => 80,
+        'average_lifespan' => 40,
+        'temperament' => 255,
+        'picture' => 500,
+    ];
 
     private BreedRepository $breeds;
 
@@ -83,25 +99,188 @@ final class BreedController
      */
     public function show(Request $request, array $params): void
     {
-        $raw = $params['id'] ?? '';
-        if (preg_match('/^[1-9][0-9]{0,9}$/', $raw) !== 1 || (int) $raw > 2147483647) {
-            throw ApiException::badRequest('Breed id must be a positive integer.');
+        $id = self::parseId($params);
+
+        Response::ok($request, $this->document($request, $this->findOrFail($id)));
+    }
+
+    /**
+     * POST /breeds   { "breed_name": "...", ...optional fields }
+     */
+    public function store(Request $request): void
+    {
+        $fields = self::validate($request->jsonBody());
+
+        if ($this->breeds->nameTaken((string) $fields['breed_name'])) {
+            throw self::duplicateName((string) $fields['breed_name']);
         }
 
-        $id = (int) $raw;
-        $breed = $this->breeds->find($id);
+        $id = $this->breeds->create($fields);
+        $document = $this->document($request, $this->findOrFail($id));
 
-        if ($breed === null) {
-            throw ApiException::notFound('breed_not_found', "Breed {$id} was not found.");
+        Response::created($document, $document['links']['self']);
+    }
+
+    /**
+     * PUT /breeds/{id}   the full record; an omitted optional field is cleared.
+     *
+     * @param array<string, string> $params
+     */
+    public function update(Request $request, array $params): void
+    {
+        $id = self::parseId($params);
+        $this->findOrFail($id);
+
+        $fields = self::validate($request->jsonBody());
+
+        if ($this->breeds->nameTaken((string) $fields['breed_name'], $id)) {
+            throw self::duplicateName((string) $fields['breed_name']);
         }
 
-        Response::ok($request, [
+        $this->breeds->update($id, $fields);
+
+        Response::written($this->document($request, $this->findOrFail($id)));
+    }
+
+    /**
+     * DELETE /breeds/{id}
+     *
+     * @param array<string, string> $params
+     */
+    public function destroy(Request $request, array $params): void
+    {
+        $id = self::parseId($params);
+
+        if (!$this->breeds->delete($id)) {
+            throw self::notFound($id);
+        }
+
+        Response::noContent();
+    }
+
+    /**
+     * @param array<string, mixed> $breed
+     * @return array{data: array<string, mixed>, links: array{self: string, collection: string}}
+     */
+    private function document(Request $request, array $breed): array
+    {
+        $id = (int) $breed['id'];
+
+        return [
             'data' => self::present($breed),
             'links' => [
                 'self' => $request->basePath() . '/breeds/' . $id,
                 'collection' => $request->basePath() . '/breeds',
             ],
-        ]);
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function findOrFail(int $id): array
+    {
+        $breed = $this->breeds->find($id);
+        if ($breed === null) {
+            throw self::notFound($id);
+        }
+
+        return $breed;
+    }
+
+    private static function notFound(int $id): ApiException
+    {
+        return ApiException::notFound('breed_not_found', "Breed {$id} was not found.");
+    }
+
+    private static function duplicateName(string $name): ApiException
+    {
+        return ApiException::conflict('breed_exists', "A breed named \"{$name}\" already exists.");
+    }
+
+    /**
+     * @param array<string, string> $params
+     */
+    private static function parseId(array $params): int
+    {
+        $raw = $params['id'] ?? '';
+        if (preg_match('/^[1-9][0-9]{0,9}$/', $raw) !== 1 || (int) $raw > 2147483647) {
+            throw ApiException::badRequest('Breed id must be a positive integer.');
+        }
+
+        return (int) $raw;
+    }
+
+    /**
+     * Checks a create/replace body and returns one value per writable column.
+     *
+     * Every problem is collected rather than stopping at the first, so a form
+     * can mark all of its bad fields in one round trip. Blank optional fields
+     * become null, matching how `present` reads them back.
+     *
+     * @param array<string, mixed> $body
+     * @return array<string, string|null>
+     */
+    private static function validate(array $body): array
+    {
+        $errors = [];
+
+        foreach (array_keys($body) as $key) {
+            // A client echoing back the record it read is fine; the id comes
+            // from the URL, never from the body.
+            if ($key !== 'id' && !array_key_exists((string) $key, self::FIELD_LIMITS)) {
+                $errors[(string) $key] = 'Unknown field.';
+            }
+        }
+
+        $fields = [];
+        foreach (self::FIELD_LIMITS as $name => $max) {
+            $value = $body[$name] ?? null;
+
+            if ($value !== null && !is_string($value)) {
+                $errors[$name] = 'Must be a string.';
+                continue;
+            }
+
+            $value = $value === null ? '' : trim($value);
+
+            if ($value === '') {
+                if ($name === 'breed_name') {
+                    $errors[$name] = 'Breed name is required.';
+                }
+                $fields[$name] = null;
+                continue;
+            }
+
+            if (self::length($value) > $max) {
+                $errors[$name] = "Must be at most {$max} characters.";
+                continue;
+            }
+
+            if ($name === 'picture' && !self::isHttpUrl($value)) {
+                $errors[$name] = 'Must be an http:// or https:// URL.';
+                continue;
+            }
+
+            $fields[$name] = $value;
+        }
+
+        if ($errors !== []) {
+            throw ApiException::validationFailed($errors);
+        }
+
+        return $fields;
+    }
+
+    private static function isHttpUrl(string $value): bool
+    {
+        if (filter_var($value, FILTER_VALIDATE_URL) === false) {
+            return false;
+        }
+
+        $scheme = strtolower((string) parse_url($value, PHP_URL_SCHEME));
+
+        return $scheme === 'http' || $scheme === 'https';
     }
 
     /**

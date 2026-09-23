@@ -153,6 +153,48 @@ class FavoritesProvider extends ChangeNotifier {
     }
   }
 
+  /// Brings a saved breed's name, group and photo up to date after the breed
+  /// was edited, so the Favorites grid does not show the old values.
+  ///
+  /// Best effort: the snapshot is only for display, and failing to refresh it
+  /// must not make a successful breed edit look like it failed.
+  Future<void> refreshSnapshot(Breed breed) async {
+    final FavoriteBreed? existing = findById(breed.id);
+    if (existing == null) return;
+
+    final FavoriteBreed fresh = FavoriteBreed(
+      breedId: breed.id,
+      breedName: breed.name,
+      breedGroup: breed.group,
+      picture: breed.picture,
+      createdAt: existing.createdAt,
+    );
+    _favorites = <FavoriteBreed>[
+      for (final FavoriteBreed f in _favorites) f == fresh ? fresh : f,
+    ];
+    notifyListeners();
+
+    try {
+      if (_isGuest && _userId == null) {
+        await _local.replace(fresh);
+      } else if (_userId != null) {
+        await _service.updateSnapshot(userId: _userId!, favorite: fresh);
+      }
+    } catch (error) {
+      if (kDebugMode) debugPrint('PawPedia: favourite snapshot not saved: $error');
+    }
+  }
+
+  /// Drops a favourite whose breed was deleted from the catalogue. Best effort,
+  /// like [refreshSnapshot]: the delete already succeeded.
+  Future<void> forgetBreed(int breedId) async {
+    try {
+      await remove(breedId);
+    } catch (error) {
+      if (kDebugMode) debugPrint('PawPedia: favourite of deleted breed kept: $error');
+    }
+  }
+
   FavoriteBreed? findById(int breedId) {
     for (final FavoriteBreed favorite in _favorites) {
       if (favorite.breedId == breedId) return favorite;

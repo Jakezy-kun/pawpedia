@@ -1,18 +1,25 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/errors/app_exception.dart';
 import '../../core/favorite_actions.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/ui_feedback.dart';
 import '../../models/breed.dart';
 import '../../providers/breed_provider.dart';
 import '../../providers/favorites_provider.dart';
 import '../../providers/stats_provider.dart';
+import '../../widgets/app_buttons.dart';
 import '../../widgets/app_chips.dart';
 import '../../widgets/brand_header.dart';
+import '../../widgets/breed_photo_gallery.dart';
 import '../../widgets/heart_button.dart';
 import '../../widgets/network_breed_image.dart';
+import '../breed_form/breed_form_screen.dart';
 
 /// Full detail for one breed.
 ///
@@ -37,6 +44,7 @@ class BreedDetailScreen extends StatefulWidget {
 
 class _BreedDetailScreenState extends State<BreedDetailScreen> {
   late Breed _breed = widget.breed;
+  bool _deleting = false;
 
   @override
   void initState() {
@@ -57,10 +65,66 @@ class _BreedDetailScreenState extends State<BreedDetailScreen> {
     }
   }
 
+  /// Opens the pre-filled Edit form (PUT) and shows the saved result here.
+  Future<void> _edit() async {
+    final Breed? saved = await BreedFormScreen.open(context, breed: _breed);
+    if (saved == null || !mounted) return;
+    setState(() => _breed = saved);
+    context.showSnack('Changes saved');
+  }
+
+  /// Asks first, then deletes (DELETE) and leaves the screen.
+  Future<void> _delete() async {
+    final String name = _breed.name;
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext context) => AlertDialog(
+        title: Text('Delete $name?'),
+        content: const Text(
+          'This removes the breed from the catalogue for everyone using '
+          'PawPedia. It cannot be undone.',
+        ),
+        actions: <Widget>[
+          AppTextButton(
+            label: 'Cancel',
+            onPressed: () => Navigator.of(context).pop(false),
+            color: AppColors.textSecondary,
+          ),
+          AppTextButton(
+            label: 'Delete',
+            onPressed: () => Navigator.of(context).pop(true),
+            color: AppColors.destructive,
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    final BreedProvider breeds = context.read<BreedProvider>();
+    final FavoritesProvider favorites = context.read<FavoritesProvider>();
+
+    setState(() => _deleting = true);
+    try {
+      await breeds.delete(_breed.id);
+      unawaited(favorites.forgetBreed(_breed.id));
+      if (!mounted) return;
+      // Shown by the screen underneath once this one pops.
+      context.showSnack('$name deleted');
+      Navigator.of(context).pop();
+    } on AppException catch (error) {
+      if (mounted) context.showErrorSnack(error.message);
+    } finally {
+      if (mounted) setState(() => _deleting = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final TextTheme text = Theme.of(context).textTheme;
     final Size size = MediaQuery.sizeOf(context);
+    final bool canEdit = context.select<BreedProvider, bool>(
+      (BreedProvider breeds) => breeds.canEdit,
+    );
     final EdgeInsets viewPadding = MediaQuery.viewPaddingOf(context);
     final FavoritesProvider favorites = context.watch<FavoritesProvider>();
 
@@ -130,6 +194,22 @@ class _BreedDetailScreenState extends State<BreedDetailScreen> {
                               for (final String trait in _breed.temperament)
                                 TemperamentChip(label: trait),
                             ],
+                          ),
+                        ],
+                        BreedPhotoGallery(breedName: _breed.name),
+                        if (canEdit) ...<Widget>[
+                          const SizedBox(height: AppSpacing.xxl),
+                          SecondaryButton(
+                            label: 'Edit breed',
+                            icon: Icons.edit_outlined,
+                            onPressed: _deleting ? null : _edit,
+                          ),
+                          const SizedBox(height: AppSpacing.md),
+                          DestructiveButton(
+                            label: 'Delete breed',
+                            icon: Icons.delete_outline_rounded,
+                            isLoading: _deleting,
+                            onPressed: _delete,
                           ),
                         ],
                       ],

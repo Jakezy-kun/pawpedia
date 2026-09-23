@@ -50,6 +50,27 @@ class FavoritesService {
     }
   }
 
+  /// Rewrites the display snapshot of a saved breed after the breed itself
+  /// was edited. `add` cannot do this: it deliberately ignores duplicates.
+  Future<void> updateSnapshot({
+    required String userId,
+    required FavoriteBreed favorite,
+  }) async {
+    try {
+      await _client
+          .from('favorites')
+          .update(<String, dynamic>{
+            'breed_name': favorite.breedName,
+            'breed_group': favorite.breedGroup,
+            'picture': favorite.picture,
+          })
+          .eq('user_id', userId)
+          .eq('breed_id', favorite.breedId);
+    } catch (error) {
+      throw ErrorMapper.fromGenericError(error);
+    }
+  }
+
   Future<void> remove({
     required String userId,
     required int breedId,

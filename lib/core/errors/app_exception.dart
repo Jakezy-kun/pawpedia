@@ -4,10 +4,18 @@
 /// their boundary, so no widget ever has to know what a `SocketException` or a
 /// `PostgrestException` is.
 class AppException implements Exception {
-  const AppException(this.message, {this.kind = AppErrorKind.unknown});
+  const AppException(
+    this.message, {
+    this.kind = AppErrorKind.unknown,
+    this.fieldErrors = const <String, String>{},
+  });
 
   final String message;
   final AppErrorKind kind;
+
+  /// Per-field messages from a server that rejected a form, keyed by the API's
+  /// field name (`breed_name`, `picture`, ...). Empty for every other failure.
+  final Map<String, String> fieldErrors;
 
   @override
   String toString() => 'AppException($kind): $message';
@@ -26,6 +34,10 @@ enum AppErrorKind {
 
   /// Sign-in / sign-up / password problems. Message is user-facing.
   auth,
+
+  /// The server refused a write because of what was entered: an invalid field
+  /// or a name that is already taken. Message is user-facing.
+  validation,
 
   /// Everything else.
   unknown,

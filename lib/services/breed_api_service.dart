@@ -7,6 +7,7 @@ import '../core/app_config.dart';
 import '../core/errors/app_exception.dart';
 import '../core/network/breed_api_client.dart';
 import '../models/breed.dart';
+import '../models/breed_draft.dart';
 
 /// The app's source of breeds.
 ///
@@ -56,7 +57,47 @@ class BreedApiService {
     return row == null ? null : Breed.fromJson(row);
   }
 
+  /// Adds a breed and returns it as the server stored it.
+  Future<Breed> createBreed(BreedDraft draft) async {
+    _requireLiveApi();
+    return _parseSaved(await _client.createBreed(draft.toJson()));
+  }
+
+  /// Saves every field of [draft] over breed [id].
+  Future<Breed> updateBreed(int id, BreedDraft draft) async {
+    _requireLiveApi();
+    return _parseSaved(await _client.updateBreed(id, draft.toJson()));
+  }
+
+  Future<void> deleteBreed(int id) async {
+    _requireLiveApi();
+    await _client.deleteBreed(id);
+  }
+
   void dispose() => _client.dispose();
+
+  /// The seed file is bundled read-only data; there is nowhere to save to.
+  /// The UI hides the write controls in this mode, so reaching here is a bug.
+  void _requireLiveApi() {
+    if (isUsingSeedData) {
+      throw const AppException(
+        'Adding, editing and deleting breeds needs the live catalogue. Add '
+        'BREED_API_TOKEN to .env.',
+        kind: AppErrorKind.apiAuth,
+      );
+    }
+  }
+
+  static Breed _parseSaved(Map<String, dynamic> row) {
+    final Breed breed = Breed.fromJson(row);
+    if (breed.id == 0) {
+      throw const AppException(
+        'The breed service sent an unexpected response.',
+        kind: AppErrorKind.parsing,
+      );
+    }
+    return breed;
+  }
 
   // --- seed data -----------------------------------------------------------
 

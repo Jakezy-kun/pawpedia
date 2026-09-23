@@ -24,6 +24,7 @@ class AppTextField extends StatefulWidget {
     this.autofillHints,
     this.helperText,
     this.focusNode,
+    this.textCapitalization = TextCapitalization.none,
   });
 
   final String label;
@@ -43,6 +44,7 @@ class AppTextField extends StatefulWidget {
   final Iterable<String>? autofillHints;
   final String? helperText;
   final FocusNode? focusNode;
+  final TextCapitalization textCapitalization;
 
   @override
   State<AppTextField> createState() => _AppTextFieldState();
@@ -70,6 +72,7 @@ class _AppTextFieldState extends State<AppTextField> {
           enabled: widget.enabled,
           keyboardType: widget.keyboardType,
           textInputAction: widget.textInputAction,
+          textCapitalization: widget.textCapitalization,
           validator: widget.validator,
           onChanged: widget.onChanged,
           onFieldSubmitted: widget.onSubmitted,

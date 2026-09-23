@@ -1,5 +1,6 @@
-/// Form validation shared by Login, Sign Up, Edit Profile and Delete Account,
-/// so the same rule is never written twice with two different messages.
+/// Form validation shared by Login, Sign Up, Edit Profile, Delete Account and
+/// the Add / Edit Breed form, so the same rule is never written twice with two
+/// different messages.
 abstract final class Validators {
   /// Supabase enforces a minimum too, but validating here means the user finds
   /// out before a round trip rather than after one.
@@ -43,5 +44,43 @@ abstract final class Validators {
     if ((value ?? '').isEmpty) return 'Please confirm your new password';
     if (value != original) return 'Passwords do not match';
     return null;
+  }
+
+  // --- breeds ---------------------------------------------------------------
+  //
+  // Lengths match the API's limits (server/src/BreedController.php), which in
+  // turn match the MySQL columns, so the form catches what the server would
+  // reject.
+
+  static const int breedNameMax = 120;
+  static const int breedGroupMax = 60;
+  static const int originCountryMax = 80;
+  static const int lifespanMax = 40;
+  static const int temperamentMax = 255;
+  static const int pictureMax = 500;
+
+  static String? breedName(String? value) {
+    final String text = value?.trim() ?? '';
+    if (text.isEmpty) return 'Please enter the breed name';
+    if (text.length < 2) return 'That name looks a little short';
+    return maxLength(breedNameMax)(text);
+  }
+
+  /// For optional fields: empty is fine, too long is not.
+  static String? Function(String?) maxLength(int max) => (String? value) {
+        final int length = value?.trim().length ?? 0;
+        return length > max ? 'Keep this under $max characters' : null;
+      };
+
+  /// Optional; when present, a web address the app can actually load.
+  static String? pictureUrl(String? value) {
+    final String text = value?.trim() ?? '';
+    if (text.isEmpty) return null;
+    final Uri? uri = Uri.tryParse(text);
+    final bool web = uri != null &&
+        (uri.scheme == 'http' || uri.scheme == 'https') &&
+        uri.host.isNotEmpty;
+    if (!web) return 'Enter a full link starting with https://';
+    return maxLength(pictureMax)(text);
   }
 }

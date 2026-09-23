@@ -1,8 +1,10 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:pawpedia/core/errors/app_exception.dart';
 import 'package:pawpedia/core/network/breed_api_client.dart';
 import 'package:pawpedia/models/breed.dart';
+import 'package:pawpedia/models/breed_draft.dart';
 
 /// Runs the real client against a real API. Skipped unless both variables are
 /// set, so `flutter test` stays offline by default.
@@ -56,6 +58,41 @@ void main() {
 
     test('an id that does not exist is null', () async {
       expect(await client.fetchBreed(2147483647), isNull);
+    });
+
+    // Writes to whichever database the API serves, then deletes what it made.
+    test('create, update and delete round trip', () async {
+      final String name = 'Live Test Pup ${DateTime.now().millisecondsSinceEpoch}';
+      int? id;
+      try {
+        final Map<String, dynamic> created = await client.createBreed(
+          BreedDraft(name: name, originCountry: 'Japan').toJson(),
+        );
+        id = Breed.fromJson(created).id;
+        expect(id, greaterThan(0));
+        expect(created['origin_country'], 'Japan');
+
+        final Map<String, dynamic> updated = await client.updateBreed(
+          id,
+          BreedDraft(name: '$name (edited)', averageLifespan: '13-16 years').toJson(),
+        );
+        expect(updated['breed_name'], '$name (edited)');
+        expect(updated['average_lifespan'], '13-16 years');
+        expect(updated['origin_country'], isNull, reason: 'PUT replaces the record');
+
+        final Map<String, dynamic>? reread = await client.fetchBreed(id);
+        expect(reread?['breed_name'], '$name (edited)');
+
+        await expectLater(
+          client.updateBreed(id, const BreedDraft(name: '').toJson()),
+          throwsA(isA<AppException>().having(
+              (AppException e) => e.fieldErrors.keys, 'fields', contains('breed_name'))),
+        );
+      } finally {
+        if (id != null) await client.deleteBreed(id);
+      }
+
+      expect(await client.fetchBreed(id), isNull, reason: 'the breed is gone');
     });
   }, skip: skip);
 }

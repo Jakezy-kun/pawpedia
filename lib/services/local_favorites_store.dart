@@ -45,6 +45,14 @@ class LocalFavoritesStore {
     await _write(<FavoriteBreed>[favorite, ...current]);
   }
 
+  /// Swaps in a new snapshot for a saved breed, keeping its place and date.
+  Future<void> replace(FavoriteBreed favorite) async {
+    final List<FavoriteBreed> current = await list();
+    await _write(<FavoriteBreed>[
+      for (final FavoriteBreed f in current) f == favorite ? favorite : f,
+    ]);
+  }
+
   Future<void> remove(int breedId) async {
     final List<FavoriteBreed> current = await list();
     current.removeWhere((FavoriteBreed f) => f.breedId == breedId);

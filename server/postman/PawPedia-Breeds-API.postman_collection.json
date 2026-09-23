@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "PawPedia Breeds API",
-    "description": "Read-only REST API for the PawPedia breed catalogue.\n\nSelect the \"PawPedia - Local\" or \"PawPedia - Freehostia\" environment, set its `token`, then run the collection. Every request authenticates with `Authorization: Bearer {{token}}` inherited from the collection.",
+    "description": "REST API for the PawPedia breed catalogue: list, read, create, update and delete breeds.\n\nSelect the \"PawPedia - Local\" or \"PawPedia - Freehostia\" environment, set its `token`, then run the collection. Every request authenticates with `Authorization: Bearer {{token}}` inherited from the collection.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -158,6 +158,86 @@
       ]
     },
     {
+      "name": "CRUD",
+      "description": "A round trip: create a breed, read it, update it, delete it, and confirm it is gone. Run the folder in order; it leaves the catalogue exactly as it found it.",
+      "item": [
+        {
+          "name": "Create breed (POST)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"breed_name\": \"Postman Test Pup\",\n  \"breed_group\": \"Non-Sporting\",\n  \"origin_country\": \"Japan\",\n  \"average_lifespan\": \"12-15 years\",\n  \"temperament\": \"Alert, Bold, Loyal\",\n  \"picture\": \"https://images.dog.ceo/breeds/shiba/shiba-1.jpg\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": { "raw": "{{base_url}}/breeds", "host": ["{{base_url}}"], "path": ["breeds"] }
+          },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('201 Created', () => pm.response.to.have.status(201));",
+            "const body = pm.response.json();",
+            "pm.test('returns the new breed with an integer id', () => {",
+            "    pm.expect(body.data.id).to.be.a('number');",
+            "    pm.expect(body.data.breed_name).to.eql('Postman Test Pup');",
+            "});",
+            "pm.test('Location points at the new breed', () => pm.expect(pm.response.headers.get('Location')).to.match(new RegExp('/breeds/' + body.data.id + '$')));",
+            "pm.collectionVariables.set('new_breed_id', body.data.id);"
+          ] } }]
+        },
+        {
+          "name": "Read created breed (GET)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/breeds/{{new_breed_id}}", "host": ["{{base_url}}"], "path": ["breeds", "{{new_breed_id}}"] }
+          },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('200 OK', () => pm.response.to.have.status(200));",
+            "pm.test('is the breed just created', () => pm.expect(pm.response.json().data.origin_country).to.eql('Japan'));"
+          ] } }]
+        },
+        {
+          "name": "Update breed (PUT)",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"breed_name\": \"Postman Test Pup (edited)\",\n  \"breed_group\": \"Non-Sporting\",\n  \"origin_country\": \"Japan\",\n  \"average_lifespan\": \"13-16 years\",\n  \"temperament\": \"Alert, Bold, Loyal\",\n  \"picture\": \"https://images.dog.ceo/breeds/shiba/shiba-1.jpg\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": { "raw": "{{base_url}}/breeds/{{new_breed_id}}", "host": ["{{base_url}}"], "path": ["breeds", "{{new_breed_id}}"] }
+          },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('200 OK', () => pm.response.to.have.status(200));",
+            "pm.test('returns the updated values', () => {",
+            "    const data = pm.response.json().data;",
+            "    pm.expect(data.breed_name).to.eql('Postman Test Pup (edited)');",
+            "    pm.expect(data.average_lifespan).to.eql('13-16 years');",
+            "});"
+          ] } }]
+        },
+        {
+          "name": "Delete breed (DELETE)",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": { "raw": "{{base_url}}/breeds/{{new_breed_id}}", "host": ["{{base_url}}"], "path": ["breeds", "{{new_breed_id}}"] }
+          },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('204 No Content', () => pm.response.to.have.status(204));",
+            "pm.test('no body', () => pm.expect(pm.response.text()).to.eql(''));"
+          ] } }]
+        },
+        {
+          "name": "Read deleted breed -> 404",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/breeds/{{new_breed_id}}", "host": ["{{base_url}}"], "path": ["breeds", "{{new_breed_id}}"] }
+          },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('404 breed_not_found', () => {",
+            "    pm.response.to.have.status(404);",
+            "    pm.expect(pm.response.json().error.code).to.eql('breed_not_found');",
+            "});"
+          ] } }]
+        }
+      ]
+    },
+    {
       "name": "Errors",
       "item": [
         {
@@ -199,16 +279,59 @@
           ] } }]
         },
         {
-          "name": "Write attempt -> 405",
+          "name": "Missing breed_name -> 422",
           "request": {
-            "method": "DELETE",
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"breed_group\": \"Toy\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": { "raw": "{{base_url}}/breeds", "host": ["{{base_url}}"], "path": ["breeds"] }
+          },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('422 validation_failed', () => {",
+            "    pm.response.to.have.status(422);",
+            "    pm.expect(pm.response.json().error.code).to.eql('validation_failed');",
+            "});",
+            "pm.test('names the bad field', () => pm.expect(pm.response.json().error.fields).to.have.property('breed_name'));"
+          ] } }]
+        },
+        {
+          "name": "Duplicate name -> 409",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"breed_name\": \"Golden Retriever\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": { "raw": "{{base_url}}/breeds", "host": ["{{base_url}}"], "path": ["breeds"] }
+          },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('409 breed_exists', () => {",
+            "    pm.response.to.have.status(409);",
+            "    pm.expect(pm.response.json().error.code).to.eql('breed_exists');",
+            "});"
+          ] } }]
+        },
+        {
+          "name": "Update unknown breed -> 404",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"breed_name\": \"Ghost\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": { "raw": "{{base_url}}/breeds/999999", "host": ["{{base_url}}"], "path": ["breeds", "999999"] }
+          },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('404 breed_not_found', () => pm.response.to.have.status(404));"
+          ] } }]
+        },
+        {
+          "name": "Unsupported method -> 405",
+          "request": {
+            "method": "PATCH",
             "header": [],
             "url": { "raw": "{{base_url}}/breeds/{{breed_id}}", "host": ["{{base_url}}"], "path": ["breeds", "{{breed_id}}"] }
           },
           "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
             "pm.test('405 with Allow header', () => {",
             "    pm.response.to.have.status(405);",
-            "    pm.expect(pm.response.headers.get('Allow')).to.eql('GET, HEAD, OPTIONS');",
+            "    pm.expect(pm.response.headers.get('Allow')).to.eql('GET, HEAD, PUT, DELETE, OPTIONS');",
             "});"
           ] } }]
         }
@@ -217,6 +340,7 @@
   ],
   "variable": [
     { "key": "breed_id", "value": "1" },
-    { "key": "etag", "value": "" }
+    { "key": "etag", "value": "" },
+    { "key": "new_breed_id", "value": "" }
   ]
 }
