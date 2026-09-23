@@ -2,27 +2,20 @@
 
 A friendly dog-breeds directory for iOS and Android, built with Flutter.
 
-Browse, add, edit and delete breeds in a PHP/MySQL catalogue served by a custom
-REST API, search and filter them, and keep a shortlist. Live dog photos come from
-the third-party [Dog CEO API](#third-party-api-dog-ceo). Accounts, profiles and
-favourites are backed by Supabase. There is no Firebase and no social login —
-email and password only, plus a fully working guest mode.
+Browse, add, edit and delete breeds from a PHP/MySQL catalogue served by a custom
+REST API, search and filter them, and keep a list of favourites. Live dog photos
+come from the [Dog CEO API](https://dog.ceo/dog-api/). Accounts, profiles and
+favourites are stored in Supabase. Sign-in is email and password, with a fully
+working guest mode.
 
----
+## Features
 
-## Contents
-
-- [Quick start](#quick-start)
-- [Third-party API: Dog CEO](#third-party-api-dog-ceo)
-- [Breed REST API](#breed-rest-api) — endpoints, server structure, deploying to Freehostia, Postman
-- [Configuration (`.env`)](#configuration-env)
-- [Supabase setup](#supabase-setup)
-- [Deploying the delete-account Edge Function](#deploying-the-delete-account-edge-function)
-- [Running on the emulators from VS Code](#running-on-the-emulators-from-vs-code)
-- [Architecture](#architecture)
-- [Tests](#tests)
-- [Regenerating icons and splash screens](#regenerating-icons-and-splash-screens)
-- [Known limitations](#known-limitations)
+- **Explore** breeds by group, with a Random Dog card
+- **Search** by name with group and country filters
+- **Breed detail** with a photo gallery from Dog CEO
+- **Add, edit and delete** breeds through the REST API
+- **Favourites**, synced to your account or saved on the device in guest mode
+- **Profile** with avatar, name, email and password changes, and account deletion
 
 ---
 
@@ -34,306 +27,17 @@ cp .env.example .env
 flutter run
 ```
 
-**The app runs with an empty `.env`.** With no `BREED_API_TOKEN` it serves nine
-breeds from `assets/seed/breeds.json`, and with no Supabase keys it offers guest
-mode only. That means every screen is reviewable before any credentials exist.
-A banner on Explore says plainly when sample data is in use, so a demo is never
-mistaken for the live catalogue.
+The app runs even with an empty `.env`. Without a breed API token it shows nine
+sample breeds from `assets/seed/breeds.json` (with a banner saying so), and
+without Supabase keys it offers guest mode only.
 
-Requires Flutter 3.27+ / Dart 3.6+ (developed against Flutter 3.47.4, Dart 3.13.3).
+Requires Flutter 3.27+ / Dart 3.6+.
 
 ---
 
-## Third-party API: Dog CEO
+## Configuration
 
-**URL: https://dog.ceo/api** (documentation: https://dog.ceo/dog-api/)
-
-A free public API of dog photos: no key, no account, JSON over HTTPS. Every
-response is `{ "message": ..., "status": "success" }`.
-
-| Endpoint | Used for |
-| --- | --- |
-| `GET https://dog.ceo/api/breeds/image/random` | **Random Dog** card on Explore, with a *Show another* button |
-| `GET https://dog.ceo/api/breeds/list/all` | Matching our breed names to Dog CEO's (`Golden Retriever` → `retriever/golden`) |
-| `GET https://dog.ceo/api/breed/{breed}/images/random/{n}` | **More photos** gallery on Breed Detail, and *Suggest a photo* on the Add / Edit form |
-
-The client is [`DogCeoClient`](lib/core/network/dog_ceo_client.dart); name
-matching lives in [`DogPhotoService`](lib/services/dog_photo_service.dart). A
-breed Dog CEO does not know (e.g. Polish Lowland Sheepdog) simply shows no
-gallery rather than photos of a different dog.
-
----
-
-## Breed REST API
-
-The breed catalogue is served by a small PHP REST API in [`server/`](server/),
-deployed to Freehostia next to the MySQL database it reads and writes. It
-replaces the original single-script `dogbreeds.php` endpoint, which returned
-JSON labelled as `text/html`, prefixed every body with `/*  */` and answered a
-missing token with 400.
-
-### Endpoints
-
-Base URL: `http://dogbreeds.mooo.com/api` (switch to `https://` once SSL is on).
-Every request except `OPTIONS` needs `Authorization: Bearer <token>`.
-
-| Method | Path | Does | Success |
-| --- | --- | --- | --- |
-| `GET` | `/breeds` | List breeds (paginated, filterable) | `200` |
-| `GET` | `/breeds/{id}` | Read one breed | `200` |
-| `POST` | `/breeds` | **Create** a breed | `201` + `Location` + the new breed |
-| `PUT` | `/breeds/{id}` | **Update** (replace) a breed | `200` + the updated breed |
-| `DELETE` | `/breeds/{id}` | **Delete** a breed | `204`, no body |
-| `HEAD` | either `GET` path | Headers only | `200` |
-| `OPTIONS` | either path | CORS preflight — no token needed | `204` + `Allow` |
-
-The app uses all four CRUD operations: **Add breed** on Explore (POST), the
-pre-filled **Edit breed** form on Breed Detail (PUT), and **Delete breed** with a
-confirmation dialog (DELETE).
-
-Query parameters for `GET /breeds` — all optional, all combinable:
-
-| Parameter | Example | Meaning |
-| --- | --- | --- |
-| `search` | `search=golden` | Breed name contains, case-insensitive (max 100 chars) |
-| `group` | `group=Toy,Sporting` | Breed group is any of, case-insensitive (max 20) |
-| `country` | `country=Scotland` | Origin country is any of, case-insensitive (max 20) |
-| `page` | `page=2` | 1-based page number (default 1) |
-| `per_page` | `per_page=25` | 1–100 (default 50) |
-
-**Collection response**
-
-```json
-{
-  "data": [
-    {
-      "id": 1,
-      "breed_name": "Golden Retriever",
-      "breed_group": "Sporting",
-      "origin_country": "Scotland",
-      "average_lifespan": "10-12 years",
-      "temperament": "Friendly, Intelligent, Devoted, Gentle",
-      "picture": "https://images.dog.ceo/breeds/retriever-golden/mori_1.jpg"
-    }
-  ],
-  "meta":  { "total": 9, "count": 1, "page": 1, "per_page": 1, "total_pages": 9 },
-  "links": {
-    "self":  "/api/breeds?page=1&per_page=1",
-    "first": "/api/breeds?page=1&per_page=1",
-    "last":  "/api/breeds?page=9&per_page=1",
-    "prev":  null,
-    "next":  "/api/breeds?page=2&per_page=1"
-  }
-}
-```
-
-Links keep any `search`/`group`/`country` filters, so following `next` never
-drops them. `GET /breeds/{id}` returns `{ "data": { ...breed }, "links": {...} }`.
-
-**Create and update bodies** are JSON (`Content-Type: application/json`):
-
-```json
-{
-  "breed_name": "Shiba Inu",
-  "breed_group": "Non-Sporting",
-  "origin_country": "Japan",
-  "average_lifespan": "12-15 years",
-  "temperament": "Alert, Bold, Loyal",
-  "picture": "https://images.dog.ceo/breeds/shiba/shiba-1.jpg"
-}
-```
-
-| Field | Rule |
-| --- | --- |
-| `breed_name` | **Required.** At most 120 characters. Unique, ignoring case. |
-| `breed_group` | Optional, at most 60 |
-| `origin_country` | Optional, at most 80 |
-| `average_lifespan` | Optional, at most 40 |
-| `temperament` | Optional, at most 255; comma-separated traits |
-| `picture` | Optional, at most 500; must be an `http://` or `https://` URL |
-
-Values are trimmed; blank optional fields are stored as `null`. `PUT` replaces
-the whole record, so an omitted optional field is cleared. `id` comes from the
-URL and is ignored in a body; any other unknown field is rejected. Both return
-`{ "data": { ...breed }, "links": {...} }`, like `GET /breeds/{id}`.
-
-Some shared hosts block `PUT` and `DELETE`. A client stuck behind one can send
-`POST /breeds/{id}` with `X-HTTP-Method-Override: PUT` (or `DELETE`) instead.
-
-**Errors** always have the same shape, with the HTTP status repeated in the body:
-
-```json
-{ "error": { "status": 404, "code": "breed_not_found", "message": "Breed 99 was not found." } }
-```
-
-| Status | `code` | When |
-| --- | --- | --- |
-| 200 | — | Success |
-| 304 | — | `If-None-Match` matches the current `ETag` (no body) |
-| 201 | — | Breed created (`POST`) |
-| 204 | — | Breed deleted (`DELETE`), or an `OPTIONS` preflight |
-| 400 | `invalid_parameter` / `invalid_json` | Bad `page`, `per_page`, `search`, list length or non-integer id / a body that is not a JSON object |
-| 401 | `unauthorized` | Token missing or wrong. Sends `WWW-Authenticate: Bearer realm="PawPedia"` |
-| 403 | `https_required` | Plain HTTP while `require_https` is on |
-| 404 | `breed_not_found` / `route_not_found` | No such breed / no such path |
-| 405 | `method_not_allowed` | A method the path does not support (e.g. `PATCH`, or `DELETE /breeds`). Sends `Allow` |
-| 409 | `breed_exists` | `POST`/`PUT` with a name another breed already has |
-| 413 | `payload_too_large` | Body over 16 KB |
-| 415 | `unsupported_media_type` | Body sent without `Content-Type: application/json` |
-| 422 | `validation_failed` | A field breaks a rule above. `error.fields` names each one: `{ "breed_name": "Breed name is required." }` |
-| 500 | `server_misconfigured` / `internal_error` | Config missing or placeholder token; unexpected error (logged, never shown) |
-| 503 | `database_unavailable` | MySQL unreachable. Sends `Retry-After` |
-
-Every response is `Content-Type: application/json; charset=utf-8` with
-`X-Content-Type-Options: nosniff` and no `X-Powered-By`. Successful reads carry
-a weak `ETag` and `Cache-Control: private, max-age=300`; writes are
-`Cache-Control: no-store`.
-
-### How the server is structured
-
-```
-server/
-  .htaccess                 domain root: no directory listing, hide X-Powered-By
-  api/
-    .htaccess               routes /api/* to index.php, keeps the Authorization header
-    index.php               front controller
-  src/                      web access denied
-    bootstrap.php           wires config → request → auth → router → controller
-    Request.php             parsed method, path, query, headers
-    Response.php            the only code that writes output; discards stray output first
-    Router.php              GET/POST/PUT/DELETE routes; 404 vs 405 vs dispatch; OPTIONS preflight
-    Auth.php                constant-time bearer token check
-    Database.php            PDO with real prepared statements
-    BreedRepository.php     all SQL (SELECT, INSERT, UPDATE, DELETE); every value bound
-    BreedController.php     /breeds and /breeds/{id}: validation, pagination, links, CRUD
-    ApiException.php        one exception type per HTTP error
-  config/
-    config.example.php      copy to config.php (gitignored); web access denied
-  database/schema.sql       reference schema and recommended indexes
-  postman/                  collection + Local and Freehostia environments
-  tests/
-    run_tests.php           end-to-end checks against a real server
-    make_dev_db.php         SQLite copy of the catalogue for local work
-    dev-router.php          .htaccess equivalent for php -S
-```
-
-Written for **PHP 7.4**, which is what Freehostia runs (7.4.33). No PHP 8 syntax.
-
-### Deploying to Freehostia
-
-1. **Create the config.** Copy `server/config/config.example.php` to
-   `server/config/config.php`. Fill in the MySQL details (the same ones the
-   current `connection.php` uses), the table name, and `api_token` — reuse the
-   token the app and Postman already have. The API refuses to serve anything
-   while `api_token` is empty or still `change-me`.
-2. **Upload** through Freehostia's File Manager or FTP, into the domain's web
-   root, so it sits alongside the existing files:
-   ```
-   public_html/            (the dogbreeds.mooo.com document root)
-     .htaccess             ← server/.htaccess — merge if one already exists
-     api/                  ← server/api/
-     src/                  ← server/src/
-     config/               ← server/config/  (config.php + .htaccess)
-     auth.php  connection.php  dogbreeds.php   (old files, leave for now)
-   ```
-   Safer still: put `src/` and `config/` **outside** `public_html` and point
-   `$appRoot` in `api/index.php` at them.
-3. **Check it** from a terminal (or with the Postman collection below):
-   ```bash
-   curl -i -H "Authorization: Bearer YOUR_TOKEN" http://dogbreeds.mooo.com/api/breeds
-   ```
-   Expect `200`, `Content-Type: application/json; charset=utf-8`, and a body
-   that starts with `{`.
-4. **If `/api/breeds` returns 404** but `/api/index.php/breeds` works,
-   `mod_rewrite` is unavailable on the plan. Set
-   `BREED_API_BASE_URL=http://dogbreeds.mooo.com/api/index.php` — the API and
-   the app both handle that form.
-   **If the whole site returns 500** after uploading `.htaccess`, the host does
-   not allow `Options` overrides; delete the `Options -Indexes` line.
-   To check writes too, run the **CRUD** folder of the Postman collection: it
-   creates a breed, reads it, updates it, deletes it and confirms it is gone.
-   - **`POST` returns 500 `server_misconfigured`** and the PHP error log says
-     `Field 'id' doesn't have a default value`: the live table's `id` is not
-     `AUTO_INCREMENT`. Fix it in phpMyAdmin with
-     `ALTER TABLE breeds MODIFY id INT UNSIGNED NOT NULL AUTO_INCREMENT;`
-   - **Writes return 503**: the MySQL user in `config.php` may only have
-     `SELECT`. Grant it `INSERT, UPDATE, DELETE` on the table.
-   - **`PUT`/`DELETE` return 403 or 405 from the host itself** (an HTML page,
-     not the API's JSON error): the host blocks those methods. The API accepts
-     `POST` with `X-HTTP-Method-Override: PUT` / `DELETE` for exactly this case.
-5. **Retire the old endpoint** once the app works against the new one: delete
-   `dogbreeds.php` and `auth.php`, and `connection.php` once nothing else uses it.
-   (`auth.php` is also the likely source of the old `/*  */` prefix — it returns
-   exactly that text, which suggests it sits outside the `<?php` tag.)
-6. **Turn on HTTPS** when Freehostia allows it: uncomment the redirect in the
-   root `.htaccess`, set `'require_https' => true`, and change the app's
-   `BREED_API_BASE_URL` to `https://`. Until then the bearer token travels
-   unencrypted, which is the API's biggest remaining weakness.
-
-### Fixing the photo links
-
-Every `picture` in the live database points at `via.placeholder.com`, a service
-that shut down — the domain no longer resolves, so no client can load those
-images. The app degrades to a paw placeholder, which is correct behaviour but
-not what you want on screen.
-
-[`server/database/fix_breed_data.sql`](server/database/fix_breed_data.sql)
-replaces all ten with free dog.ceo photos (each URL verified to return a real
-JPEG) and corrects row 9's name from "DChihuahua" to "Chihuahua". Paste it into
-phpMyAdmin's SQL tab. It writes only the `picture` and `breed_name` columns of
-rows matched by id, and adds or deletes nothing.
-
-### DNS: FreeDNS → Freehostia
-
-`dogbreeds.mooo.com` needs an **A record** in FreeDNS pointing at the Freehostia
-server's IP (currently `162.210.102.232`), and the domain must be added as a
-hosted domain in Freehostia's control panel. Both are already in place — the
-host serves the site. If Freehostia ever moves the account to another server,
-update the A record.
-
-### Running the API locally
-
-Uses XAMPP's PHP and a SQLite copy of the catalogue; no MySQL needed.
-
-```bash
-php server/tests/make_dev_db.php
-```
-
-```powershell
-$env:PAWPEDIA_CONFIG="$PWD\server\database\dev\config.php"
-php -S 127.0.0.1:8080 -t server server/tests/dev-router.php
-```
-
-Then `GET http://127.0.0.1:8080/api/breeds` with `Authorization: Bearer dev-token`.
-To point the app on the Android emulator at it, set
-`BREED_API_BASE_URL=http://10.0.2.2:8080/api` and `BREED_API_TOKEN=dev-token`
-(`10.0.2.2` is the emulator's name for your computer; debug builds allow
-cleartext to it, release builds do not).
-
-### Postman
-
-Import everything in [`server/postman/`](server/postman/): the collection and
-both environments. Pick **PawPedia - Local** or **PawPedia - Freehostia**, set
-`token` on the Freehostia one (it is a *secret* variable — do not export or
-share the environment once it holds the real value), and run the collection.
-Its tests check status codes, the `{data, meta, links}` shape, the error shape,
-`Content-Type`, that nothing precedes the JSON, 304 on a repeated request, a full
-create → read → update → delete round trip (the **CRUD** folder, which cleans up
-after itself), and 401/404/400/405/409/422 on the error cases.
-
-### Why the app still filters on the device
-
-`BreedProvider` fetches the whole catalogue once — following `links.next` across
-pages — and filters in memory. The Explore chips show a count per group, which
-needs every breed anyway; the catalogue is small; and local filtering
-makes the debounced search instant. The API's `search`/`group`/`country`
-parameters exist for Postman and any other client.
-
----
-
-## Configuration (`.env`)
-
-`.env` is gitignored. `.env.example` is the committed template.
+`.env` is gitignored; `.env.example` is the template.
 
 ```env
 SUPABASE_URL=https://your-project-ref.supabase.co
@@ -343,188 +47,82 @@ BREED_API_BASE_URL=http://dogbreeds.mooo.com/api
 BREED_API_TOKEN=your-static-bearer-token
 ```
 
-Loaded at startup by `flutter_dotenv` via
-[`AppConfig`](lib/core/app_config.dart). `.env` is declared as an asset in
-`pubspec.yaml`, which is what makes it readable on a real device.
+> Only use the Supabase **anon** key here. Everything in `.env` ships inside the
+> app, so the `service_role` key must never go in it.
 
-**One mechanism, not two.** `flutter_dotenv` is used *instead of*
-`--dart-define-from-file`, so there is exactly one place configuration comes
-from and nothing to keep in sync between the launch configs and the CLI.
+---
 
-> **Never put the `service_role` key in `.env`.** Everything in this file ships
-> inside the app bundle and can be read by anyone who downloads it. The
-> `service_role` key belongs only in the Edge Function's server-side
-> environment. Use the **anon** / publishable key here.
+## APIs
+
+### Breed REST API
+
+A PHP API in [`server/`](server/), hosted on Freehostia with MySQL. Every
+request needs `Authorization: Bearer <token>`.
+
+| Method | Path | Does |
+| --- | --- | --- |
+| `GET` | `/breeds` | List breeds (supports `search`, `group`, `country`, `page`, `per_page`) |
+| `GET` | `/breeds/{id}` | Read one breed |
+| `POST` | `/breeds` | Create a breed |
+| `PUT` | `/breeds/{id}` | Update a breed |
+| `DELETE` | `/breeds/{id}` | Delete a breed |
+
+Full reference, deployment steps, local setup and Postman collection:
+**[server/README.md](server/README.md)**.
+
+### Dog CEO (third-party)
+
+A free public API of dog photos, with no key needed.
+
+| Endpoint | Used for |
+| --- | --- |
+| `GET /breeds/image/random` | Random Dog card on Explore |
+| `GET /breeds/list/all` | Matching our breed names to Dog CEO's |
+| `GET /breed/{breed}/images/random/{n}` | Photo gallery on Breed Detail and photo suggestions on the breed form |
 
 ---
 
 ## Supabase setup
 
-1. Create a project at [supabase.com](https://supabase.com).
-2. Copy the project URL and the **anon** key from *Project Settings → API* into
-   `.env`.
-3. Run [`supabase/migrations/0001_init.sql`](supabase/migrations/0001_init.sql)
-   in the SQL editor. It creates:
-   - `public.profiles` (1:1 with `auth.users`) and `public.favorites`
-   - the `handle_new_user` trigger that seeds a profile row on sign-up
-   - **Row Level Security enabled on both tables, with all four policies each**
-   - the public-read `avatars` storage bucket with owner-only write policies
+1. Create a project at [supabase.com](https://supabase.com) and copy the project
+   URL and **anon** key into `.env`.
+2. Run [`supabase/migrations/0001_init.sql`](supabase/migrations/0001_init.sql)
+   in the SQL editor. It creates the `profiles` and `favorites` tables with Row
+   Level Security, a trigger that creates a profile on sign-up, and the
+   `avatars` storage bucket.
+3. Deploy the delete-account function (it needs the `service_role` key, which
+   must stay on the server):
+   ```bash
+   supabase login
+   supabase link --project-ref your-project-ref
+   supabase functions deploy delete-account
+   ```
 
-`favorites.breed_id` is deliberately **not** a foreign key: breeds live in MySQL
-on another host. Each row stores a display snapshot (name, group, picture) so
-the Favorites grid renders from one query instead of N calls to the breed API.
-
-### Verifying RLS actually works
-
-This is worth doing once, by hand — RLS is the only thing standing between the
-public anon key and every user's data.
-
-1. Sign up as `a@example.com` on one emulator and save a favourite.
-2. Sign up as `b@example.com` on a second emulator (or after logging out).
-3. As user B, confirm the Favorites tab is empty and Profile shows B's name.
-
-If B can see A's rows, RLS is not enabled — re-run the migration.
-
-### Email confirmation
-
-If *Authentication → Providers → Email → Confirm email* is on, `signUp` returns
-no session and the app shows a **Check your inbox** screen. Turn it off for
-faster local testing.
-
----
-
-## Deploying the delete-account Edge Function
-
-A client cannot delete its own auth user — that needs the `service_role` key,
-which must never ship in an app. The function verifies the caller's own JWT and
-deletes only that user; `profiles` and `favorites` then cascade.
-
-```bash
-supabase login
-supabase link --project-ref your-project-ref
-supabase functions deploy delete-account
-```
-
-`SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are injected by the platform, so
-no secrets need setting by hand. Until this is deployed, the Delete Account
-screen shows a clear error rather than failing silently.
-
----
-
-## Running on the emulators from VS Code
-
-### Launching an emulator
-
-Command Palette (`Ctrl+Shift+P`) → **Flutter: Launch Emulator** → pick
-**Pixel 6**. The *Devices & AVDs* sidebar extension can start it too, without
-opening Android Studio.
-
-From the terminal:
-
-```bash
-flutter emulators --launch Pixel_6
-```
-
-### Switching the active device
-
-Click the device name in the **bottom-right of the VS Code status bar**, or use
-Command Palette → **Flutter: Select Device**.
-
-### Run configurations
-
-`F5` runs the last-used configuration. Pick one from the Run and Debug panel:
-
-| Configuration | Use it for |
-| --- | --- |
-| **PawPedia (debug)** | Day-to-day work. Hot reload. |
-| **PawPedia (profile)** | Breed-list scroll performance. Debug builds are not representative — profile on the Pixel 6, which is the slower target. |
-| **PawPedia (release)** | Final check before handing a build over. |
-
-### About the "iPhone 15 Pro" emulator
-
-The AVD named `iPhone_15_Pro` on this machine is **an Android emulator**
-(API 34), not an iOS simulator, and its `hw.lcd` is set to 393×852 *pixels* at
-460 dpi — which yields roughly a 137×297 dp viewport, far smaller than a real
-iPhone 15 Pro. Layouts will overflow there.
-
-To make it emulate the real device, set in its `config.ini`:
-
-```ini
-hw.lcd.width = 1179
-hw.lcd.height = 2556
-hw.lcd.density = 460
-```
-
-That gives the correct 393×852 dp logical viewport.
-
-**Real iOS builds need macOS with Xcode.** See
-[Known limitations](#known-limitations).
+If *Confirm email* is turned on in Supabase, new users see a "Check your inbox"
+screen after signing up.
 
 ---
 
 ## Architecture
 
-Feature-first, with `provider` (`ChangeNotifier`) for state throughout.
+Feature-first structure, with `provider` for state management.
 
 ```
 lib/
-  core/        config, theme, validators, networking, error mapping, Supabase bootstrap
-  models/      Breed, BreedDraft, DogPhoto, Profile, FavoriteBreed  (fromJson / toJson)
-  services/    breed_api, dog_photo, auth, profile, favorites, local_favorites_store
+  core/        config, theme, validators, networking, error handling
+  models/      Breed, BreedDraft, DogPhoto, Profile, FavoriteBreed
+  services/    breed API, dog photos, auth, profile, favourites
   providers/   auth, breed, favorites, profile, stats
   screens/     one folder per screen
   widgets/     shared components
-supabase/
-  migrations/0001_init.sql
-  functions/delete-account/index.ts
-server/        PHP REST API for breeds (see "Breed REST API")
+server/        PHP REST API for breeds
+supabase/      database migration and delete-account Edge Function
 ```
 
-### Two data sources, kept separate
-
-| | Breeds | Users, auth, favourites | Dog photos |
+| | Breeds | Users and favourites | Dog photos |
 | --- | --- | --- | --- |
-| Backend | PHP REST API + MySQL on Freehostia | Supabase (PostgreSQL) | Dog CEO (third-party, public) |
-| Access | Full CRUD, static bearer token | Supabase Auth, per-user JWT | Read-only, no key |
-| Entry point | `BreedApiClient` | `SupabaseBootstrap` | `DogCeoClient` |
-
-### Navigation
-
-[`AuthGate`](lib/screens/auth_gate.dart) is the only place navigation depends on
-auth. `AuthProvider` is driven by `supabase.auth.onAuthStateChange`, so a
-session expiring — or a sign-out on another device — moves the app without any
-screen pushing or popping.
-
-```
-splash (restoring session)
-  ├── signed out + never onboarded → Onboarding → Login / Sign Up
-  ├── signed out + onboarded       → Login / Sign Up
-  └── signed in OR guest           → Main shell
-                                       Explore · Search · Favorites · Profile
-```
-
-### Guest mode
-
-Guests get the real feature set, not a disabled one. Browsing works (it only
-needs the breed token) and favourites are saved to `SharedPreferences` in the
-same JSON shape as the Supabase rows, so `FavoritesProvider` treats the two
-stores interchangeably. Every surface that shows guest favourites says they live
-on one device.
-
-### Security notes
-
-- Anon key only in the app; `service_role` lives solely in the Edge Function.
-- RLS on both tables, all four policies each.
-- Cleartext HTTP scoped to one domain, never global (debug builds add `10.0.2.2`
-  for a local API).
-- The breed client only follows pagination links on the same scheme, host and
-  port, so a misbehaving server cannot redirect the bearer token elsewhere.
-- `changePassword` re-verifies the current password with `signInWithPassword`
-  first. `updateUser(password:)` alone will change the password of anyone
-  holding a live session without asking for the old one — on an unlocked phone
-  that is an account takeover.
-- `updateEmail` does not take effect until the link in the new mailbox is
-  clicked, and the UI says so rather than implying it is done.
+| Backend | PHP + MySQL (Freehostia) | Supabase | Dog CEO |
+| Access | Full CRUD, bearer token | Per-user login | Read-only, no key |
 
 ---
 
@@ -532,72 +130,22 @@ on one device.
 
 ```bash
 flutter analyze
-flutter test                       # app: models, API client, widgets
-php server/tests/run_tests.php     # API: end-to-end HTTP checks
+flutter test                       # models, API clients, widgets
+php server/tests/run_tests.php     # API end-to-end checks
 ```
 
-**App.** `Breed.fromJson` against string-typed ids, null columns, the literal
-string `"null"` and messy temperaments; the breed client's paths, bearer header,
-pagination, same-origin link check and status-code handling, and its
-create/update/delete requests with 409/422 field errors (against a mocked
-server); `BreedDraft` never writing display placeholders back; Dog CEO parsing
-and breed-name matching; widget tests at 2× text scale.
-
-**API.** Starts PHP's built-in server on a throwaway SQLite database and checks
-authentication and challenges, JSON content type and clean bodies, pagination
-and links, filtering (including literal `%`, `_` and `!` in searches), 400/404
-cases, create (201 + `Location`), update, delete (204) and their 401/404/409/413/
-415/422 failures, method override, 405 with the right `Allow` per path, OPTIONS
-preflight, HEAD, ETag and 304, the `/api/index.php/...` form, a placeholder token
-(500), an unreachable database (503, no driver message leaked), and stray output
-before `<?php` being discarded.
-
-**Client against the real API.** Skipped unless pointed at a server:
+To run the app's client tests against a real API server:
 
 ```powershell
 $env:PAWPEDIA_API_BASE_URL="http://127.0.0.1:8080/api"; $env:PAWPEDIA_API_TOKEN="dev-token"
 flutter test test/breed_api_live_test.dart
 ```
 
-Use the Freehostia URL and your token to check the deployed API the same way.
-The live test includes a create → update → delete round trip, so it writes one
-temporary breed to that database and deletes it again.
-
-### What was verified on the Pixel 6 emulator
-
-Every screen was walked in guest mode with seed data: onboarding, login, Explore,
-Breed Detail, Search (including multi-select filters), Favorites and Profile.
-Favouriting, removing, filtering and the stat counters all work end to end.
-
-Re-run at **1.5× system font** (`adb shell settings put system font_scale 1.5`):
-**zero `RenderFlex` overflows** anywhere in the app. Long captions wrap, the
-favourites tile lets the photo shrink so the caption always fits, and the
-bottom-nav labels hold.
-
-Scroll performance, measured in profile mode from the VM service timeline over
-ten full-list swipes:
-
-| | median | p90 | p99 | max | frames over 16.67 ms |
-| --- | --- | --- | --- | --- | --- |
-| UI thread | 3.0 ms | 7.1 ms | 11.1 ms | 15.6 ms | **0 (0%)** |
-| Raster thread | 15.1 ms | 20.1 ms | 28.1 ms | 30.3 ms | 31% |
-
-The UI thread never misses a frame — widget build is 0.11 ms median, which is
-`ListView.builder` doing its job. The raster figures are the **emulator's
-software GL renderer**, not a real GPU, and should not be read as device
-performance; re-measure on physical hardware before drawing conclusions.
-
-Decoding images at their displayed size (`memCacheWidth` in
-[`NetworkBreedImage`](lib/widgets/network_breed_image.dart)) measurably helped
-even so — raster p99 fell from 34.2 ms to 28.1 ms, max from 43.2 ms to 30.3 ms,
-and `saveLayer` calls halved. Without it, a 1600×1200 photo was being decoded in
-full to paint a 68 dp thumbnail, once per card.
+This creates, updates and deletes one temporary breed.
 
 ---
 
-## Regenerating icons and splash screens
-
-Source art is in `assets/icon/` and `assets/splash/`.
+## Icons and splash screens
 
 ```bash
 dart run flutter_launcher_icons
@@ -608,24 +156,14 @@ dart run flutter_native_splash:create
 
 ## Known limitations
 
-- **Anyone with the app can change the catalogue.** The breed API has one
-  static bearer token, and it ships inside the app bundle, so whoever extracts
-  it can create, edit and delete breeds. That is acceptable for a class project;
-  a real deployment would put writes behind per-user auth (for example by
-  verifying the caller's Supabase JWT in `Auth.php`) and keep the static token
-  for reads only.
-- **iOS is unverified.** This was developed on Windows, where no iOS simulator
-  exists. All iOS configuration ships and is correct by inspection — ATS
-  exception, camera and photo-library usage strings, Cupertino page transitions
-  (which also restore swipe-from-left back), launcher icons, splash — but none
-  of it has been built or run. Do that on a Mac with Xcode before shipping.
-- **Onboarding illustrations are low resolution.** They were extracted from the
-  supplied design PDF at roughly 330×250, so they are soft on a 3× screen.
-  Replace the three files in `assets/illustrations/` with full-resolution
-  exports when they are available.
-- **The design mockups show Google and Apple sign-in buttons.** These are
-  deliberately not implemented: the written specification rules out social login
-  entirely. "Continue as Guest" sits where they were.
-- **Notifications, Privacy, About and Help** are informational dialogs, not
-  full screens. The specification lists them as settings rows without defining
-  destinations.
+- **The breed API token ships inside the app**, so anyone who extracts it can
+  change the catalogue. A production version would require per-user login for
+  writes.
+- **iOS has not been built or tested.** It was developed on Windows; iOS builds
+  need a Mac with Xcode.
+- **Onboarding illustrations are low resolution** and should be replaced with
+  full-size exports.
+- **No Google or Apple sign-in.** The project specification rules out social
+  login, so "Continue as Guest" takes their place.
+- **Notifications, Privacy, About and Help** open simple dialogs rather than
+  full screens.
